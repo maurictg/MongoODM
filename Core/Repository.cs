@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Threading.Tasks;
 using Core.Abstractions;
 using Core.Attributes;
 using Core.Helpers;
@@ -15,8 +16,9 @@ namespace Core
     public class Repository<T> where T : Entity
     {
         private readonly IMongoDatabase _database;
-        private readonly IMongoCollection<T> _collection;
-
+        public IMongoCollection<T> Collection { get; }
+        private readonly Dictionary<string, bool> _populates;
+        
         //Methods used for reflection part
         private readonly MethodInfo _castMethod;
         private readonly MethodInfo _toListMethod;
@@ -33,7 +35,8 @@ namespace Core
         {
             collection ??= typeof(T).Name.ToSnakeCase();
             _database = database;
-            _collection = _database.GetCollection<T>(collection);
+            Collection = _database.GetCollection<T>(collection);
+            _populates = new Dictionary<string, bool>();
 
             //Get reflection methods
             _castMethod = typeof(Enumerable).GetMethod(nameof(Enumerable.Cast)) ??
@@ -55,9 +58,10 @@ namespace Core
         /// </summary>
         /// <param name="t">The type to be evaluated</param>
         /// <param name="value">The instance to be filled</param>
-        private void PopulateHook(Type t, object value)
+        /// <param name="path">The current path. Please do not provide</param>
+        private void PopulateHook(Type t, object value, string path = "")
         {
-            Console.WriteLine("![T]! Checking " + t.Name);
+            Console.WriteLine("![T]! Checking " + t.Name + " at "+path);
             foreach (var prop in t.GetProperties())
             {
                 bool skip = false;
@@ -77,6 +81,13 @@ namespace Core
                     //If reference attribute, check if it is enabled
                     if (attr is ReferenceAttribute refAttr)
                     {
+                        //Check if runtime populates must set the enabled propery or not
+                        if (_populates.TryGetValue(path + prop.Name, out bool isEnabled))
+                        {
+                            Console.WriteLine("[CREF] Found override populate on "+prop.Name);
+                            refAttr.Enabled = isEnabled;
+                        }
+                        
                         //If not enabled, skip whole propery (ignore everything)
                         if (!refAttr.Enabled)
                         {
@@ -86,8 +97,12 @@ namespace Core
                         }
 
                         //If the propery is already filled, we assume it is already populated
+                        //But we still need to check everything in it, so skip is not set
                         if (val != null)
-                            continue;
+                        {
+                            Console.WriteLine("[NREF] Property is already filled!");
+                            break;
+                        }
 
                         Console.WriteLine("[REF] Found enabled referenceAttribute on " + prop.Name);
 
@@ -140,6 +155,7 @@ namespace Core
                             }
                             else
                             {
+                                //Set list value
                                 prop.SetValue(value, results);
                             }
                         }
@@ -151,6 +167,8 @@ namespace Core
                             prop.SetValue(value, res);
                         }
 
+                        //Make sure the val variable now is set correctly
+                        //val = value might work, but this is more consistent???
                         val = prop.GetValue(value);
                     }
                 }
@@ -168,14 +186,12 @@ namespace Core
                 if (propType.IsCollection(out t))
                 {
                     Console.WriteLine("Collection containing " + t.Name);
-                    var cast = typeof(Enumerable).GetMethod(nameof(Enumerable.Cast))?.MakeGenericMethod(t);
-                    var casted = cast?.Invoke(null, new[] {val});
+                    var cast = _castMethod.MakeGenericMethod(t);
+                    var casted = cast.Invoke(null, new[] {val});
                     if (casted != null)
                     {
                         foreach (var c in (IEnumerable) casted)
-                        {
-                            PopulateHook(t, c);
-                        }
+                            PopulateHook(t, c, path+prop.Name+".");
                     }
                     else
                     {
@@ -185,13 +201,14 @@ namespace Core
                 else //If not, run populate hook over object
                 {
                     Console.WriteLine("Type is Entity, index");
-                    PopulateHook(t, val);
+                    PopulateHook(t, val, path+prop.Name+".");
                 }
             }
         }
 
         /// <summary>
         /// Depopulation hook, used to remove the populated values from an object
+        /// That means, ALL populated values are set to NULL
         /// </summary>
         /// <param name="t">The type to be evaluated</param>
         /// <param name="value">The value to be set</param>
@@ -199,16 +216,33 @@ namespace Core
         {
             foreach (var prop in t.GetProperties())
             {
+                Console.WriteLine("[P] Checking "+prop.Name);
                 foreach (var attr in prop.GetCustomAttributes())
                 {
-                    switch (attr)
+                    //If embed attribute, check if collection
+                    if (attr is EmbedAttribute)
                     {
-                        case EmbedAttribute:
-                            DepopulateHook(prop.PropertyType, prop.GetValue(value));
-                            break;
-                        case ReferenceAttribute:
-                            prop.SetValue(value, null);
-                            break;
+                        //If collection, foreach it into the hook recursively
+                        if (prop.PropertyType.IsCollection(out t))
+                        {
+                            var cast = _castMethod.MakeGenericMethod(t);
+                            var casted = cast.Invoke(null, new[] {prop.GetValue(value)});
+                            if (casted != null)
+                            {
+                                foreach (var c in (IEnumerable) casted)
+                                    DepopulateHook(t, c);
+                            }
+                        }
+                        else //If not, run the populate hook on the single property
+                        {
+                            DepopulateHook(t, prop.GetValue(value));
+                        }
+                    }
+                    
+                    //If reference attribute, set its value to null and do not run any recursion
+                    if (attr is ReferenceAttribute)
+                    {
+                        prop.SetValue(value, null);
                     }
                 }
             }
@@ -226,18 +260,122 @@ namespace Core
         /// </summary>
         /// <param name="value">The value to be depopulated</param>
         /// <returns>Depopulated value</returns>
-        public T DepopulateHook(T value)
+        private T DepopulateHook(T value)
         {
             var val = value.Clone();
             DepopulateHook(typeof(T), val);
             return (T)val;
         }
+        
+        /*
+         * IN PROGRESS
+         */
 
-        public T First()
+        
+        // !! IN PROGRESS !!: Integrate in PopulateHook when done could increase performance
+        private IAggregateFluent<BsonDocument> BuildAggregateHook(IAggregateFluent<BsonDocument> aggregate, Type t, string path = "")
         {
-            var first = _collection.Find(x => true).First();
+            foreach (var prop in t.GetProperties())
+            {
+                Console.WriteLine("[AGG] Property "+prop.Name);
+                foreach (var attr in prop.GetCustomAttributes())
+                {
+                    //If reference attribute, add a lookup for it
+                    if (attr is ReferenceAttribute refAttr)
+                    {
+                        if (_populates.TryGetValue(path + prop.Name, out bool isEnabled))
+                            refAttr.Enabled = isEnabled;
+                        
+                        if(!refAttr.Enabled)
+                            break;
+
+                        var localField = path + refAttr.LocalField;
+                        var targetField = path + prop.Name;
+
+                        aggregate = aggregate.Lookup(refAttr.RefCollection, localField, refAttr.RefField, targetField);
+                        if (!prop.PropertyType.IsCollection(out _))
+                            aggregate = aggregate.Unwind(targetField);
+                    }
+
+                    /*if (attr is EmbedAttribute)
+                    {
+                        bool isCollection = prop.PropertyType.IsCollection(out Type elementType);
+
+                        if (isCollection)
+                            aggregate = aggregate.Unwind(prop.Name);
+
+                        aggregate = BuildAggregateHook(aggregate, elementType, path + prop.PropertyType.Name + ".");
+                        
+                        //Build group
+                        //Need other fields from aggregate hook for this
+                    }*/
+                }
+            }
+
+            return aggregate;
+        }
+
+        /// <summary>
+        /// Creates a filter for one item's ID
+        /// </summary>
+        /// <param name="id">The id to be filtered</param>
+        /// <returns>Filter</returns>
+        private FilterDefinition<T> GetFilter(ObjectId id)
+            => Builders<T>.Filter.Eq(x => x.Id, id);
+
+        /// <summary>
+        /// Sets a population change in the internal dictionary
+        /// Used when populating, checks whether the attribute must be used
+        /// </summary>
+        /// <param name="path">The path to be set, like User.Emails</param>
+        /// <param name="enabled">True to enable, false to disable</param>
+        private void SetPopulate(string path, bool enabled)
+        {
+            if (!_populates.TryAdd(path, enabled))
+                _populates[path] = enabled;
+        }
+
+        /// <summary>
+        /// Override a specific reference attribute to be enabled in population
+        /// </summary>
+        /// <param name="path">The object to be populated</param>
+        public void Populate(string path) => SetPopulate(path, true);
+        
+        /// <summary>
+        /// Override a specific reference attribute to be disabled in population
+        /// </summary>
+        /// <param name="path">The object to be disabled</param>
+        public void Depopulate(string path) => SetPopulate(path, false);
+
+        /// <summary>
+        /// Reset all populate attribute overrides
+        /// </summary>
+        public void ResetPopulates()
+            => _populates.Clear();
+
+        //How-to with async and await? Can i run async from sync method?
+        //https://docs.microsoft.com/en-us/dotnet/csharp/programming-guide/concepts/async/
+
+        //Methods, methods, methods
+
+        //In progress method
+        public T FirstBeta()
+        {
+            var aggregate = BuildAggregateHook(Collection.Aggregate().As<BsonDocument>(), typeof(T));
+            var first = aggregate.Limit(1).As<T>().First();
             PopulateHook(first);
             return first;
         }
+
+        public T First()
+        {
+            return Collection.Aggregate().Limit(1).First();
+        }
+        
+        /*
+         * CRUD methods
+         *
+         * TODO: make wrapper, like DbSet<>
+         */
     }
 }

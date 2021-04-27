@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Text.Json;
 using Core;
@@ -49,12 +50,15 @@ namespace Cli
             var client = new MongoClient(mongoClientSettings);
             var db = client.GetDatabase("mongo_demo");
             var repo = new Repository<User>(db, "users");
-            var user = repo.First();
+            
+            Stopwatch sw = Stopwatch.StartNew();
+            
+            var user = repo.FirstBeta();
+            
+            Console.WriteLine("Done in "+sw.Elapsed);
+            
             Console.WriteLine(user.ToJson());
 
-            var res = repo.DepopulateHook(user);
-            //Check depop
-            Console.WriteLine(res.ToJson());
 
             //Soooo difficult. just start from scratch with understanding reflection
             /*var obj = new Obj1()

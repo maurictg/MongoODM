@@ -74,7 +74,7 @@ namespace Core.Helpers
             if (input.Contains('_') && char.IsLower(input[0]))
             {
                 var parts = input.Split('_');
-                return parts[0] + string.Join("", parts.Select(x => char.ToUpper(x[0]) + x[1..]));
+                return parts[0] + string.Join("", parts.Skip(1).Select(x => char.ToUpper(x[0]) + x[1..]));
             }
 
             //If PascalCase
@@ -85,7 +85,7 @@ namespace Core.Helpers
             if (input.Contains('-') && char.IsLower(input[0]))
             {
                 var parts = input.Split('-');
-                return parts[0] + string.Join("", parts.Select(x => char.ToUpper(x[0]) + x[1..]));
+                return parts[0] + string.Join("", parts.Skip(1).Select(x => char.ToUpper(x[0]) + x[1..]));
             }
 
             return input;
@@ -98,6 +98,7 @@ namespace Core.Helpers
         /// <returns>The input string in snake_case</returns>
         public static string ToSnakeCase(this string input)
         {
+            input = input.ToCamelCase();
             var sb = new StringBuilder();
             sb.Append(char.ToLower(input[0]));
             for(var i = 1; i < input.Length; ++i) {
@@ -111,5 +112,50 @@ namespace Core.Helpers
             }
             return sb.ToString();
         }
+        
+        /*
+        /// <summary>
+        /// Set value to specific path in object. Ignores everything that does not exist, also handles arrays/collections.
+        /// So: MyArray.ArrayValue will set all ArrayValues in MyArray
+        /// </summary>
+        /// <param name="path">The path in the object</param>
+        /// <param name="obj">The object to be modified</param>
+        /// <param name="data">The data to be set</param>
+        public static void SetValues(string path, object obj, object data)
+        {
+            if (obj == null)
+                return;
+            
+            var paths = path.Split('.');
+            var t = obj.GetType();
+            
+            var attr = t.GetProperty(paths[0]);
+            if (attr == null)
+                return;
+
+            if (paths.Length > 1)
+            {
+                if (attr.PropertyType.IsCollectionOf(typeof(object), out _)) //to-do is type
+                {
+                    var value = attr.GetValue(obj) as IEnumerable;
+                    if (value == null)
+                        return;
+
+                    foreach (var item in value)
+                        SetValues(string.Join('.',paths[1..]), item, data);
+                }
+                
+                if (attr.PropertyType.IsAssignableTo(typeof(object)))
+                {
+                    var item = attr.GetValue(obj);
+                    SetValues(string.Join('.',paths[1..]), item, data);
+                }
+            }
+            else
+            {
+                //Set value
+                attr.SetValue(obj, data);
+            }
+        }*/
     }
 }
