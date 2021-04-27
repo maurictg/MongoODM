@@ -9,7 +9,7 @@ namespace Cli
     {
         public string Name { get; set; }
         
-        [Reference("products", "ProductRefs")]
+        [Reference("products", "ProductRefs", autoPopulate: true)]
         public List<Product> Products { get; set; }
         public List<ObjectId> ProductRefs { get; set; }
     }

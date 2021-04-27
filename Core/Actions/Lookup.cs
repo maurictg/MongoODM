@@ -2,16 +2,24 @@ using Core.Abstractions;
 
 namespace Core.Actions
 {
-    internal class Lookup : IMapperAction
+    internal class Lookup : MapperAction
     {
-        public string Path { get; set; }
-        public bool Enabled { get; set; }
-        public bool IsCollection { get; set; }
+        /// <summary>
+        /// The field containing the references
+        /// </summary>
         public string LocalField { get; set; }
+        
+        /// <summary>
+        /// The collection containing the elements
+        /// </summary>
         public string RefCollection { get; set; }
+        
+        /// <summary>
+        /// The field, matching the local field
+        /// </summary>
         public string RefField { get; set; }
 
         public override string ToString()
-            =>$"LOOKUP {Path} ({(Enabled ? "On" : "Off")}{(IsCollection?", Collection":"")})"+ $" Local: {LocalField}, RefCollection: {RefCollection}, RefField: {RefField}";
+            =>base.ToString()+$" Local: {LocalField}, RefCollection: {RefCollection}, RefField: {RefField}";
     }
 }

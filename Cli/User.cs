@@ -13,8 +13,9 @@ namespace Cli
         [Embed]
         public List<Usernames> Usernames { get; set; }
         
-        [Reference("orders", "OrderRefs")]
-        public List<Order> Orders { get; set; }
+        [Reference("orders", "OrderRefs", autoPopulate: true)]
+        public Order[] Orders { get; set; }
+        
         public List<ObjectId> OrderRefs { get; set; }
     }
 }

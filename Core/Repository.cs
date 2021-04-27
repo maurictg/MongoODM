@@ -1,355 +1,243 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
-using System.Threading.Tasks;
+using System.Reflection;
 using Core.Abstractions;
-using Core.Actions;
 using Core.Attributes;
 using Core.Helpers;
 using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 
 namespace Core
 {
-    /// <summary>
-    /// MongoDb ODM wrapper
-    /// </summary>
-    /// <typeparam name="T">The entity</typeparam>
     public class Repository<T> where T : Entity
     {
+        private readonly IMongoDatabase _database;
         private readonly IMongoCollection<T> _collection;
-        private readonly List<IMapperAction> _mapActions;
-        
-        /// <summary>
-        /// The raw mongo collection
-        /// </summary>
-        public IMongoCollection<T> Collection => _collection;
+
+        //Methods used for reflection part
+        private readonly MethodInfo _castMethod;
+        private readonly MethodInfo _toListMethod;
+        private readonly MethodInfo _toArrayMethod;
+        private readonly MethodInfo _deserializeMethod;
 
         /// <summary>
-        /// Create a new repository (or inherit from this class)
+        /// Create new repository
         /// </summary>
-        /// <param name="collection">The collection to be used by the repository</param>
-        public Repository(IMongoCollection<T> collection)
+        /// <param name="database">The database used</param>
+        /// <param name="collection">The name of the collection, defaults to the name of the generic type in snake_case</param>
+        /// <exception cref="ArgumentException"></exception>
+        public Repository(IMongoDatabase database, string collection = null)
         {
-            _collection = collection;
-            _mapActions = new List<IMapperAction>();
-            MapPopulate(typeof(T));
+            collection ??= typeof(T).Name.ToSnakeCase();
+            _database = database;
+            _collection = _database.GetCollection<T>(collection);
+
+            //Get reflection methods
+            _castMethod = typeof(Enumerable).GetMethod(nameof(Enumerable.Cast)) ??
+                          throw new ArgumentException("Failed to get cast method");
+
+            _toListMethod = typeof(Enumerable).GetMethod(nameof(Enumerable.ToList)) ??
+                            throw new ArgumentException("Failed to get toList method");
+
+            _toArrayMethod = typeof(Enumerable).GetMethod(nameof(Enumerable.ToArray)) ??
+                             throw new ArgumentException("Failed to get toArray method");
+
+            _deserializeMethod = typeof(BsonSerializer).GetMethods()
+                .Where(x => x.Name == nameof(BsonSerializer.Deserialize))
+                .First(x => x.IsGenericMethod);
         }
 
-        #if DEBUG
-        public void debug()
-        {
-            foreach (var x in _mapActions)
-            {
-                Console.WriteLine(x.ToString());
-            }
-        }
-        #endif
-
         /// <summary>
-        /// Find and map all populate attributes, also nested
+        /// The population logic. Is called recursively over all properties and is used to lookup and fill enabled references
         /// </summary>
-        /// <param name="item">The item to be searched</param>
-        /// <param name="path">Path. Please leave empty, used in recursion</param>
-        private void MapPopulate(Type item, string path = "")
+        /// <param name="t">The type to be evaluated</param>
+        /// <param name="value">The instance to be filled</param>
+        private void PopulateHook(Type t, object value)
         {
-            var level = path.Count(x => x == '.');
-            var parent = path.TrimEnd('.');
-            //var parent = string.Join('.', path.TrimEnd('.').Split('.')[..^1]);
-            
-            foreach (var p in item.GetProperties())
+            Console.WriteLine("![T]! Checking " + t.Name);
+            foreach (var prop in t.GetProperties())
             {
-                var t = p.PropertyType;
+                bool skip = false;
+                bool index = false;
 
-                //Get IMongoAttributes (Embed, Reference)
-                foreach (var attr in p.GetCustomAttributes(true).Where(x => x is IMongoAttribute))
+                Console.WriteLine("[P] Property " + prop.Name);
+                var val = prop.GetValue(value);
+                var propType = prop.PropertyType;
+                
+                //Check attributes
+                foreach (var attr in prop.GetCustomAttributes(true))
                 {
-                    //If collection, unwind
-                    if (t.IsCollection(out Type elementType))
+                    //If embed or reference attribute, make sure to index 
+                    if (attr is IMongoAttribute)
+                        index = true;
+
+                    //If reference attribute, check if it is enabled
+                    if (attr is ReferenceAttribute refAttr)
                     {
-                        //If references, lookup them first
-                        if (attr is ReferenceAttribute refAttr)
+                        //If not enabled, skip whole propery (ignore everything)
+                        if (!refAttr.Enabled)
                         {
-                            _mapActions.Add(new Lookup
-                            {
-                                LocalField = path+refAttr.LocalField,
-                                Path = path+p.Name,
-                                RefCollection = refAttr.RefCollection,
-                                RefField = refAttr.RefField,
-                                IsCollection = true
-                            });
+                            Console.WriteLine("[XREF] Found disabled referenceAttribute, skipping");
+                            skip = true;
+                            break;
                         }
+
+                        //If the propery is already filled, we assume it is already populated
+                        if (val != null)
+                            continue;
+
+                        Console.WriteLine("[REF] Found enabled referenceAttribute on " + prop.Name);
+
+                        //Get values
+                        var refFieldValue = Tools.GetValue(refAttr.LocalField, value);
                         
-                        //Add unwind, but disabled for this path
-                        _mapActions.Add(new Unwind
+                        //If no references are present, ignore and skip
+                        if (refFieldValue == null)
                         {
-                            Path = path+p.Name,
-                            IsCollection = true
-                        });
+                            Console.WriteLine("[XREF] No references are present");
+                            skip = true;
+                            break;
+                        }
+
+                        //Convert ref(s) to ICollection of objectIds
+                        var refs = !refFieldValue.GetType().IsCollection(out _)
+                            ? new List<ObjectId> {(ObjectId) refFieldValue}
+                            : (ICollection<ObjectId>) refFieldValue;
+
+                        //Lookup document
+                        var refCollection = _database.GetCollection<BsonDocument>(refAttr.RefCollection);
+                        var filter = Builders<BsonDocument>.Filter.In(refAttr.RefField, refs);
+                        var query = refCollection.Find(filter).ToList();
+
+                        //Get output type
+                        var outputType = propType;
+                        var isArray = outputType.IsArray;
+                        var isCollection = outputType.IsCollection(out outputType);
+
+                        //Deserialize results
+                        var deserialize = _deserializeMethod.MakeGenericMethod(outputType);
+                        var queryResults = query.Select(x =>
+                            deserialize.Invoke(null, new object[] {x, null})).ToList();
                         
-                        //If nested, check for parent array groupings
-                        if (level > 0)
+                        //Convert results to desired type
+                        var cast = _castMethod.MakeGenericMethod(outputType);
+                        var castResults = cast.Invoke(null, new[] {queryResults});
+
+                        var toList = _toListMethod.MakeGenericMethod(outputType);
+                        var results = toList.Invoke(null, new[] {castResults});
+
+                        //Check if the output type is an collection. If so, fill with array or list value
+                        if (isCollection)
                         {
-                            var parentActions = _mapActions.Where(x => x.Path == parent && x.IsCollection).ToArray();
-                            if (parentActions.Any())
+                            Console.WriteLine("Set value to " + prop.Name + ", is " + results);
+                            if (isArray)
                             {
-                                foreach (var parentAction in parentActions)
-                                    parentAction.Enabled = true;
-                                
-                                Console.WriteLine("Group "+parent+" because needed for "+path+p.Name);
-                                //Add group attribute for parent
-                                _mapActions.Add(new Group
-                                {
-                                    Enabled = true,
-                                    Path = parent,
-                                    IsCollection = true
-                                });
+                                var toArray = _toArrayMethod.MakeGenericMethod(outputType);
+                                prop.SetValue(value, toArray.Invoke(null, new[] {results}));
+                            }
+                            else
+                            {
+                                prop.SetValue(value, results);
                             }
                         }
+                        else
+                        {
+                            //If not, get first item (always 1, we assume) and fill it
+                            Console.WriteLine("Set value to " + prop.Name + ", is " + results);
+                            var res = ((IList) results)?[0];
+                            prop.SetValue(value, res);
+                        }
 
-                        MapPopulate(elementType, path+p.Name+'.');
+                        val = prop.GetValue(value);
+                    }
+                }
+
+                Console.WriteLine("Property " + prop.Name + " with value " + (val ?? "NULL"));
+
+                //If skip is triggered, value is still null or value is not needed to be indexed skip property
+                if (skip || val == null || !index)
+                {
+                    Console.WriteLine("[SKIP] Skipping " + prop.Name);
+                    continue;
+                }
+
+                //Check if property is collection. If so, run populate hook over every item in the collection
+                if (propType.IsCollection(out t))
+                {
+                    Console.WriteLine("Collection containing " + t.Name);
+                    var cast = typeof(Enumerable).GetMethod(nameof(Enumerable.Cast))?.MakeGenericMethod(t);
+                    var casted = cast?.Invoke(null, new[] {val});
+                    if (casted != null)
+                    {
+                        foreach (var c in (IEnumerable) casted)
+                        {
+                            PopulateHook(t, c);
+                        }
                     }
                     else
-                        MapPopulate(t, path+p.Name+'.');
-                    
+                    {
+                        Console.WriteLine("[E] CASTED IS NULL!");
+                    }
+                }
+                else //If not, run populate hook over object
+                {
+                    Console.WriteLine("Type is Entity, index");
+                    PopulateHook(t, val);
                 }
             }
         }
 
         /// <summary>
-        /// Generates an aggregate pipeline including the lookups
+        /// Depopulation hook, used to remove the populated values from an object
         /// </summary>
-        /// <returns>Aggregation pipeline</returns>
-        private IAggregateFluent<T> BuildAggregate()
+        /// <param name="t">The type to be evaluated</param>
+        /// <param name="value">The value to be set</param>
+        private void DepopulateHook(Type t, object value)
         {
-            //list names of level 0 collections for group by
-            //unwinds
-            //create lookups + unwinds
-            //create group
-
-            /*var a = _collection.Aggregate().As<BsonDocument>();
-            var populates = _populates
-                .OrderBy(x => x.Level)
-                .ThenBy(x => x.TargetField)
-                .Where(x => x.On).ToList();
-            
-            var first = populates.First();
-            bool isBigAggregate = first.IsNested;
-
-            if (isBigAggregate)
+            foreach (var prop in t.GetProperties())
             {
-                a = a.Unwind(first.TargetField.Split('.')[0]);
+                foreach (var attr in prop.GetCustomAttributes())
+                {
+                    switch (attr)
+                    {
+                        case EmbedAttribute:
+                            DepopulateHook(prop.PropertyType, prop.GetValue(value));
+                            break;
+                        case ReferenceAttribute:
+                            prop.SetValue(value, null);
+                            break;
+                    }
+                }
             }
-
-            foreach (var p in populates)
-            {
-                a = a.BuildLookup(p);
-            }
-
-            if (isBigAggregate)
-            {
-                a = a.BuildGroup(first);
-            }
-
-            return a.As<T>();*/
-            return _collection.Aggregate();
         }
 
-       
-
-        /*
         /// <summary>
-        /// Toggles populate attribute
+        /// Shorthand for the population hook
         /// </summary>
-        /// <param name="field">The field to be toggled</param>
-        /// <param name="on">On or off</param>
-        private void ChangePopulate(string field, bool on)
+        /// <param name="value">The value to be populated</param>
+        private void PopulateHook(T value)
+            => PopulateHook(typeof(T), value);
+
+        /// <summary>
+        /// Shorthand for the depopulation hook.
+        /// </summary>
+        /// <param name="value">The value to be depopulated</param>
+        /// <returns>Depopulated value</returns>
+        public T DepopulateHook(T value)
         {
-            var p = _populates.FirstOrDefault(x => x.TargetField == field);
-            if (p == null)
-                throw new ArgumentException("Field does not exist or not contain populate attribute");
-            p.On = on;
-        }*/
-        
+            var val = value.Clone();
+            DepopulateHook(typeof(T), val);
+            return (T)val;
+        }
 
-        /*
-        /// <summary>
-        /// Hook to run before update or insert. Empties target field for populates and fills the reference (localField) with references
-        /// </summary>
-        /// <param name="itemToDepopulate">The item to be cloned and modified</param>
-        /// <returns>Modified item</returns>
-        private T DepopulateHook(T itemToDepopulate)
-        {
-            var item = itemToDepopulate.Clone();
-            foreach (var p in _populates.OrderBy(x => x.TargetField).Where(x => x.On))
-                Tools.SetValues(p.TargetField, item, null);
-
-            return item as T;
-        }*/
-
-        /// <summary>
-        /// Creates a filter for one item's ID
-        /// </summary>
-        /// <param name="id">The id to be filtered</param>
-        /// <returns>Filter</returns>
-        private FilterDefinition<T> GetFilter(ObjectId id)
-            => Builders<T>.Filter.Eq(x => x.Id, id);
-        
-        /*
-         * ODM (Object Document Mapper) methods
-         */
-        
-        /*
-        /// <summary>
-        /// Populate field or array. Enter the name of the field to be filled, use Populate attribute above the field containing the references
-        /// </summary>
-        /// <param name="targetField">The field to be filled</param>
-        public void Populate(string targetField)
-            => ChangePopulate(targetField, true);
-
-        /// <summary>
-        /// Depopulate field or array. Use the name of the target field
-        /// </summary>
-        /// <param name="targetField">The field to be depopulated</param>
-        public void Depopulate(string targetField)
-            => ChangePopulate(targetField, false);
-
-        /// <summary>
-        /// Populate field by hand (without populate attribute)
-        /// </summary>
-        /// <param name="otherCollection">The other collection's name, i.e "users"</param>
-        /// <param name="targetField">The field to be filled (in current collection)</param>
-        /// <param name="localField">The field in current collection containing the references</param>
-        /// <param name="isCollection">Indicates if target field is array or collection. Defaults to true</param>
-        /// <param name="otherField">The key field in the other collection, default _id</param>
-        public void Populate(string otherCollection, string targetField, string localField, bool isCollection = true,
-            string otherField = "_id")
-        {
-            if (_populates.All(x => x.TargetField != targetField))
-                _populates.Add(new Populate
-                {
-                    RefCollection = otherCollection, TargetField = targetField, LocalField = localField,
-                    IsObject = !isCollection, RefField = otherField, On = true, Level = targetField.Count(x => x == '.')
-                });
-            else
-                Populate(targetField);
-        }*/
-
-        /// <summary>
-        /// Find item by id
-        /// </summary>
-        /// <param name="id">Item's ID</param>
-        /// <returns>The item, or null if not found</returns>
-        public T FindById(ObjectId id)
-            => BuildAggregate().Match(x => x.Id == id).Limit(1).FirstOrDefault();
-        
-        public T FindById(string id)
-            => FindById(new ObjectId(id));
-
-        /// <summary>
-        /// Enumerate all items in collection
-        /// </summary>
-        /// <returns>IEnumerable</returns>
-        public IEnumerable<T> All()
-            => BuildAggregate().ToEnumerable();
-
-        /// <summary>
-        /// Get first item in collection
-        /// </summary>
-        /// <returns>First item in collection, or null if collection is empty</returns>
         public T First()
-            => BuildAggregate().Limit(1).FirstOrDefault();
-
-        /// <summary>
-        /// Enumerate all items with limit
-        /// </summary>
-        /// <param name="limit">The limit</param>
-        /// <returns>IEnumerable</returns>
-        public IEnumerable<T> All(int limit)
-            => BuildAggregate().Limit(limit).ToEnumerable();
-        
-        
-        /// <summary>
-        /// Insert one or more documents into collection
-        /// </summary>
-        /// <param name="items">The item(s) to be inserted</param>
-        public async Task Insert(params T[] items)
-            => await _collection.InsertManyAsync(items/*.Select(DepopulateHook)*/);
-
-        /// <summary>
-        /// Update document
-        /// </summary>
-        /// <param name="item">The document to be updated</param>
-        public async Task Update(T item)
-            => await _collection.ReplaceOneAsync(x => x.Id == item.Id, item/*DepopulateHook(item)*/);
-
-        /// <summary>
-        /// Delete existing item
-        /// </summary>
-        /// <param name="item">The item to be deleted</param>
-        public async Task Delete(T item) 
-            => await Delete(item.Id);
-        
-        public async Task Delete(string id) 
-            => await Delete(new ObjectId(id));
-
-        /// <summary>
-        /// Delete item by id
-        /// </summary>
-        /// <param name="id">The item to be deleted</param>
-        public async Task Delete(ObjectId id)
-            => await _collection.DeleteOneAsync(b => b.Id == id);        
-        
-        /// <summary>
-        /// Count all documents
-        /// </summary>
-        /// <returns>long</returns>
-        public async Task<long> Count()
-            => await Count(Builders<T>.Filter.Empty);
-        
-        /*
-         * Documents without any special functionality or guarantees
-         */
-        
-        /// <summary>
-        /// Update documents by id (raw)
-        /// </summary>
-        /// <param name="id">The id</param>
-        /// <param name="update">update definition</param>
-        public async Task Update(string id, UpdateDefinition<T> update)
-            => await Update(new ObjectId(id), update);
-
-        /// <summary>
-        /// Update documents by id (raw)
-        /// </summary>
-        /// <param name="id">The id</param>
-        /// <param name="update">update definition</param>
-        public async Task Update(ObjectId id, UpdateDefinition<T> update)
-            => await _collection.UpdateOneAsync(GetFilter(id), update);
-
-        /// <summary>
-        /// Update documents by filter (raw)
-        /// </summary>
-        /// <param name="filter">The update filter</param>
-        /// <param name="update">update definition</param>
-        public async Task Update(FilterDefinition<T> filter, UpdateDefinition<T> update)
-            => await _collection.UpdateManyAsync(filter, update);
-
-        
-        /// <summary>
-        /// Delete documents by filter (raw)
-        /// </summary>
-        /// <param name="filter">The filter</param>
-        public async Task Delete(FilterDefinition<T> filter)
-            => await _collection.DeleteManyAsync(filter);
-
-        
-        /// <summary>
-        /// Count documents by filter (raw)
-        /// </summary>
-        /// <param name="filter">The filter</param>
-        /// <returns>long</returns>
-        public async Task<long> Count(FilterDefinition<T> filter)
-            => await _collection.CountDocumentsAsync(filter);
+        {
+            var first = _collection.Find(x => true).First();
+            PopulateHook(first);
+            return first;
+        }
     }
 }

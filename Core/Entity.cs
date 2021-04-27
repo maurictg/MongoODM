@@ -1,3 +1,4 @@
+using Core.Abstractions;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Bson.Serialization.Attributes;
@@ -9,7 +10,7 @@ namespace Core
     /// Contains ID. When creating Embedded class, use IEntity
     /// </summary>
     [BsonIgnoreExtraElements]
-    public abstract class Entity
+    public abstract class Entity : IEntity
     {
         /// <summary>
         /// Represents MongoDB _id

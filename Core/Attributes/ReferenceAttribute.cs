@@ -15,17 +15,22 @@ namespace Core.Attributes
         /// <summary>
         /// The referenced field. Defaults to _id
         /// </summary>
-        public string RefField { get; set; }
+        public string RefField { get; private set; }
         
         /// <summary>
         /// The local field containing the Id's
         /// </summary>
-        public string LocalField { get; set; }
+        public string LocalField { get; private set; }
         
         /// <summary>
         /// Indicates if mongoODM has to auto populate this field. Defaults to false
         /// </summary>
-        public bool AutoPopulate { get; set; }
+        public bool AutoPopulate { get; private set; }
+        
+        /// <summary>
+        /// Indicates if reference is enabled (populated). Defaults to true when AutoPopulate is on
+        /// </summary>
+        public bool Enabled { get; set; }
 
         /// <summary>
         /// Create new reference attribute
@@ -40,6 +45,7 @@ namespace Core.Attributes
             LocalField = localField;
             RefField = refField;
             AutoPopulate = autoPopulate;
+            Enabled = autoPopulate;
         }
     }
 }

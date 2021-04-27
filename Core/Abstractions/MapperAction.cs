@@ -1,6 +1,8 @@
+using System.Linq;
+
 namespace Core.Abstractions
 {
-    internal interface IMapperAction
+    internal abstract class MapperAction
     {
         /// <summary>
         /// The path of the field containing the action
@@ -16,5 +18,13 @@ namespace Core.Abstractions
         /// Indicate if path is collection
         /// </summary>
         public bool IsCollection { get; set; }
+
+        /// <summary>
+        /// Get level of action
+        /// </summary>
+        public int Level => Path.Count(x => x == '.');
+
+        public override string ToString()
+            => $"({GetType().Name.ToUpper()}: {(Enabled?"On":"Off")}) @{Path}, {(IsCollection?"Collection":"")} ";
     }
 }
