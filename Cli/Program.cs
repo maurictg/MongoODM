@@ -51,13 +51,29 @@ namespace Cli
             var db = client.GetDatabase("mongo_demo");
             var repo = new Repository<User>(db, "users");
             
+            repo.Depopulate("Orders");
+            repo.Depopulate("Usernames.Emails");
+            repo.Logging = false;
+
             Stopwatch sw = Stopwatch.StartNew();
             
+            sw.Restart();
+
+            var user0 = repo.First();
+            Console.WriteLine(sw.Elapsed);
+
             var user = repo.FirstBeta();
+            Console.WriteLine(sw.Elapsed);
+            sw.Restart();
             
-            Console.WriteLine("Done in "+sw.Elapsed);
-            
-            Console.WriteLine(user.ToJson());
+            var user1 = repo.FirstBeta();
+            Console.WriteLine(sw.Elapsed);
+            sw.Restart();
+
+            var user2 = repo.First();
+            Console.WriteLine(sw.Elapsed);
+
+
 
 
             //Soooo difficult. just start from scratch with understanding reflection

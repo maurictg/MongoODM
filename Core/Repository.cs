@@ -1,12 +1,15 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Text.Json;
 using System.Threading.Tasks;
 using Core.Abstractions;
 using Core.Attributes;
 using Core.Helpers;
+using Core.Properties;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
@@ -16,8 +19,11 @@ namespace Core
     public class Repository<T> where T : Entity
     {
         private readonly IMongoDatabase _database;
-        public IMongoCollection<T> Collection { get; }
         private readonly Dictionary<string, bool> _populates;
+        
+        public IMongoCollection<T> Collection { get; }
+
+        public bool Logging { get; set; } = true;
         
         //Methods used for reflection part
         private readonly MethodInfo _castMethod;
@@ -35,8 +41,10 @@ namespace Core
         {
             collection ??= typeof(T).Name.ToSnakeCase();
             _database = database;
-            Collection = _database.GetCollection<T>(collection);
             _populates = new Dictionary<string, bool>();
+            
+            Collection = _database.GetCollection<T>(collection);
+
 
             //Get reflection methods
             _castMethod = typeof(Enumerable).GetMethod(nameof(Enumerable.Cast)) ??
@@ -53,6 +61,12 @@ namespace Core
                 .First(x => x.IsGenericMethod);
         }
 
+        private void Log(object message)
+        {
+            if(Logging)
+                Console.WriteLine(message);
+        }
+
         /// <summary>
         /// The population logic. Is called recursively over all properties and is used to lookup and fill enabled references
         /// </summary>
@@ -61,13 +75,14 @@ namespace Core
         /// <param name="path">The current path. Please do not provide</param>
         private void PopulateHook(Type t, object value, string path = "")
         {
-            Console.WriteLine("![T]! Checking " + t.Name + " at "+path);
+            Log("![T]! Checking " + t.Name + " at "+path);
             foreach (var prop in t.GetProperties())
             {
                 bool skip = false;
                 bool index = false;
 
-                Console.WriteLine("[P] Property " + prop.Name);
+                Log("[P] Property " + prop.Name);
+                
                 var val = prop.GetValue(value);
                 var propType = prop.PropertyType;
                 
@@ -84,14 +99,14 @@ namespace Core
                         //Check if runtime populates must set the enabled propery or not
                         if (_populates.TryGetValue(path + prop.Name, out bool isEnabled))
                         {
-                            Console.WriteLine("[CREF] Found override populate on "+prop.Name);
+                            Log("[CREF] Found override populate on "+prop.Name);
                             refAttr.Enabled = isEnabled;
                         }
                         
                         //If not enabled, skip whole propery (ignore everything)
                         if (!refAttr.Enabled)
                         {
-                            Console.WriteLine("[XREF] Found disabled referenceAttribute, skipping");
+                            Log("[XREF] Found disabled referenceAttribute, skipping");
                             skip = true;
                             break;
                         }
@@ -100,11 +115,11 @@ namespace Core
                         //But we still need to check everything in it, so skip is not set
                         if (val != null)
                         {
-                            Console.WriteLine("[NREF] Property is already filled!");
+                            Log("[NREF] Property is already filled!");
                             break;
                         }
 
-                        Console.WriteLine("[REF] Found enabled referenceAttribute on " + prop.Name);
+                        Log("[REF] Found enabled referenceAttribute on " + prop.Name);
 
                         //Get values
                         var refFieldValue = Tools.GetValue(refAttr.LocalField, value);
@@ -112,7 +127,7 @@ namespace Core
                         //If no references are present, ignore and skip
                         if (refFieldValue == null)
                         {
-                            Console.WriteLine("[XREF] No references are present");
+                            Log("[XREF] No references are present");
                             skip = true;
                             break;
                         }
@@ -124,6 +139,7 @@ namespace Core
 
                         //Lookup document
                         var refCollection = _database.GetCollection<BsonDocument>(refAttr.RefCollection);
+                        
                         var filter = Builders<BsonDocument>.Filter.In(refAttr.RefField, refs);
                         var query = refCollection.Find(filter).ToList();
 
@@ -147,7 +163,7 @@ namespace Core
                         //Check if the output type is an collection. If so, fill with array or list value
                         if (isCollection)
                         {
-                            Console.WriteLine("Set value to " + prop.Name + ", is " + results);
+                            Log("Set value to " + prop.Name + ", is " + results);
                             if (isArray)
                             {
                                 var toArray = _toArrayMethod.MakeGenericMethod(outputType);
@@ -162,7 +178,7 @@ namespace Core
                         else
                         {
                             //If not, get first item (always 1, we assume) and fill it
-                            Console.WriteLine("Set value to " + prop.Name + ", is " + results);
+                            Log("Set value to " + prop.Name + ", is " + results);
                             var res = ((IList) results)?[0];
                             prop.SetValue(value, res);
                         }
@@ -173,19 +189,19 @@ namespace Core
                     }
                 }
 
-                Console.WriteLine("Property " + prop.Name + " with value " + (val ?? "NULL"));
+                Log("Property " + prop.Name + " with value " + (val ?? "NULL"));
 
                 //If skip is triggered, value is still null or value is not needed to be indexed skip property
                 if (skip || val == null || !index)
                 {
-                    Console.WriteLine("[SKIP] Skipping " + prop.Name);
+                    Log("[SKIP] Skipping " + prop.Name);
                     continue;
                 }
 
                 //Check if property is collection. If so, run populate hook over every item in the collection
                 if (propType.IsCollection(out t))
                 {
-                    Console.WriteLine("Collection containing " + t.Name);
+                    Log("Collection containing " + t.Name);
                     var cast = _castMethod.MakeGenericMethod(t);
                     var casted = cast.Invoke(null, new[] {val});
                     if (casted != null)
@@ -195,12 +211,12 @@ namespace Core
                     }
                     else
                     {
-                        Console.WriteLine("[E] CASTED IS NULL!");
+                        Log("[E] CASTED IS NULL!");
                     }
                 }
                 else //If not, run populate hook over object
                 {
-                    Console.WriteLine("Type is Entity, index");
+                    Log("Type is Entity, index");
                     PopulateHook(t, val, path+prop.Name+".");
                 }
             }
@@ -273,46 +289,73 @@ namespace Core
 
         
         // !! IN PROGRESS !!: Integrate in PopulateHook when done could increase performance
-        private IAggregateFluent<BsonDocument> BuildAggregateHook(IAggregateFluent<BsonDocument> aggregate, Type t, string path = "")
+        //TODO: make this working, and try more complex pattern like business case ecommerce
+        private void BuildAggregateHook(ref IAggregateFluent<BsonDocument> aggregate, Type t, AggregateSettings settings = null)
         {
+            if (settings == null)
+                settings = new AggregateSettings();
+            
             foreach (var prop in t.GetProperties())
             {
-                Console.WriteLine("[AGG] Property "+prop.Name);
+                Log("[AGG] Property "+ settings.GetPath(prop.Name));
                 foreach (var attr in prop.GetCustomAttributes())
                 {
                     //If reference attribute, add a lookup for it
                     if (attr is ReferenceAttribute refAttr)
                     {
-                        if (_populates.TryGetValue(path + prop.Name, out bool isEnabled))
+                        if (_populates.TryGetValue(settings.GetPath(prop.Name), out bool isEnabled))
                             refAttr.Enabled = isEnabled;
                         
                         if(!refAttr.Enabled)
                             break;
+                        
+                        Log("[AggR] Enabled reference found");
 
-                        var localField = path + refAttr.LocalField;
-                        var targetField = path + prop.Name;
+                        var localField = settings.GetPath(refAttr.LocalField);
+                        var targetField = settings.GetPath(prop.Name);
 
                         aggregate = aggregate.Lookup(refAttr.RefCollection, localField, refAttr.RefField, targetField);
                         if (!prop.PropertyType.IsCollection(out _))
                             aggregate = aggregate.Unwind(targetField);
                     }
 
-                    /*if (attr is EmbedAttribute)
+                    if (attr is EmbedAttribute)
                     {
+                        if(!settings.DoNest)
+                            return;
+                        
                         bool isCollection = prop.PropertyType.IsCollection(out Type elementType);
 
                         if (isCollection)
-                            aggregate = aggregate.Unwind(prop.Name);
+                            aggregate = aggregate.Unwind(settings.GetPath(prop.Name));
 
-                        aggregate = BuildAggregateHook(aggregate, elementType, path + prop.PropertyType.Name + ".");
-                        
-                        //Build group
-                        //Need other fields from aggregate hook for this
-                    }*/
+                        //Call build aggregate hook
+                        BuildAggregateHook(ref aggregate, elementType, new AggregateSettings{Path = settings.GetPath(prop.Name)+".", DoNest = false, ParentType = t, IsCollection = isCollection});
+                        AddGroupHook(settings.GetPath(prop.Name), t, ref aggregate);
+                    }
                 }
             }
+        }
 
-            return aggregate;
+        private void AddGroupHook(string target, Type parentType, ref IAggregateFluent<BsonDocument> aggregate)
+        {
+            var doc = new BsonDocument("_id", "$_id");
+            
+            //Get parent properties, not id or name of target collection
+            var props = parentType.GetProperties().Where(x => x.Name != "Id" && x.Name != target)
+                .Select(x => (x.Name, new BsonDocument("$first", "$" + x.Name)))
+                .ToDictionary(x => x.Item1, y => y.Item2);
+            doc.AddRange(props);
+            doc.Add(target, new BsonDocument("$push", "$" + target));
+            
+            aggregate = aggregate.Group(doc);
+        }
+        
+        private IAggregateFluent<T> CreateAggregate()
+        {
+            var aggregate = Collection.Aggregate().As<BsonDocument>();
+            BuildAggregateHook(ref aggregate, typeof(T));
+            return aggregate.As<T>();
         }
 
         /// <summary>
@@ -351,7 +394,9 @@ namespace Core
         /// Reset all populate attribute overrides
         /// </summary>
         public void ResetPopulates()
-            => _populates.Clear();
+        {
+            _populates.Clear();
+        }
 
         //How-to with async and await? Can i run async from sync method?
         //https://docs.microsoft.com/en-us/dotnet/csharp/programming-guide/concepts/async/
@@ -361,8 +406,7 @@ namespace Core
         //In progress method
         public T FirstBeta()
         {
-            var aggregate = BuildAggregateHook(Collection.Aggregate().As<BsonDocument>(), typeof(T));
-            var first = aggregate.Limit(1).As<T>().First();
+            var first = CreateAggregate().Limit(1).As<T>().First();
             PopulateHook(first);
             return first;
         }
@@ -371,7 +415,7 @@ namespace Core
         {
             return Collection.Aggregate().Limit(1).First();
         }
-        
+
         /*
          * CRUD methods
          *
