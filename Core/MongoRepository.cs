@@ -313,13 +313,9 @@ namespace Core
                             var fieldValue = prop.GetValue(value) ?? throw new ArgumentException("Failed to get fieldValue");
                         
                             if (fieldValue.GetType().IsCollectionOf(typeof(Entity), out _))
-                            {
                                 refProp.SetValue(value, ((ICollection<Entity>)fieldValue).Select(x => x.Id).ToList());
-                            }
                             else
-                            {
                                 refProp.SetValue(value, ((Entity)fieldValue).Id);
-                            }
                         }
                         
                         prop.SetValue(value, null);

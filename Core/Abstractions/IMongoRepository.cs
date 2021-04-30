@@ -221,6 +221,14 @@ namespace Core.Abstractions
         public bool Delete(string id);
 
         /// <summary>
+        /// Delete a document from the database
+        /// </summary>
+        /// <param name="item">The document to delete</param>
+        /// <returns>True if delete is acknowledged</returns>
+        public bool Delete(T item)
+            => Delete(item.Id);
+
+        /// <summary>
         /// Delete all documents matching a filter
         /// </summary>
         /// <param name="filter">The filter to look for</param>
@@ -232,15 +240,14 @@ namespace Core.Abstractions
         /// </summary>
         /// <param name="filter">The filter to look for</param>
         /// <returns>The amount of deleted documents. -1 if failed</returns>
-        public int DeleteMany(Expression<Func<T, bool>> filter)
-            => DeleteMany(new ExpressionFilterDefinition<T>(filter));
+        public int DeleteMany(Expression<Func<T, bool>> filter) => DeleteMany(CreateFilter(filter));
 
         /// <summary>
         /// Delete all documents matching a BsonDocument filter
         /// </summary>
         /// <param name="filter">The filter to look for</param>
         /// <returns>The amount of deleted documents. -1 if failed</returns>
-        public int DeleteMany(BsonDocument filter)
-            => DeleteMany(new BsonDocumentFilterDefinition<T>(filter));
+        public int DeleteMany(BsonDocument filter) => DeleteMany(CreateFilter(filter));
+        public int DeleteMany(string jsonFilter) => DeleteMany(CreateFilter(jsonFilter));
     }
 }
