@@ -1,12 +1,8 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
-using System.Linq.Expressions;
 using System.Reflection;
-using System.Text.Json;
-using System.Threading.Tasks;
 using Core.Abstractions;
 using Core.Attributes;
 using Core.Helpers;
@@ -17,10 +13,14 @@ using MongoDB.Driver;
 
 namespace Core
 {
-    public class Repository<T> where T : Entity
+    /// <summary>
+    /// The repository base class. Contains the population mechanism and shorthands/helpers for the Mongo API.
+    /// </summary>
+    /// <typeparam name="T">The entity type this class represents</typeparam>
+    public class MongoRepository<T> : IMongoRepository<T> where T : Entity
     {
-        protected readonly IMongoDatabase _database;
-        protected readonly Dictionary<string, bool> _populates;
+        private readonly IMongoDatabase _database;
+        private readonly Dictionary<string, bool> _populates;
         
         /// <summary>
         /// The mongoCollection that is used in the repository
@@ -30,12 +30,13 @@ namespace Core
         /// <summary>
         /// Enables/disables logging to the console
         /// </summary>
-        public bool Logging { get; set; }
+        public bool UseLogging { get; set; }
 
         /// <summary>
         /// Indicates if you want to use an aggregate to $lookup some fields before population
         /// This reduces the amount of queries created during population
         /// The $lookup is less performant than just the DoPopulate that uses $in.
+        /// ISSUE: $lookup does not work on single document
         /// </summary>
         public bool UseLookup { get; set; }
 
@@ -44,6 +45,12 @@ namespace Core
         /// </summary>
         public bool DoPopulate { get; set; } = true;
         
+        /// <summary>
+        /// Indicates if you want to automatically convert list of objects to list of references in the depopulate mechanism.
+        /// Currently you must enable it manually to use this feature
+        /// </summary>
+        public bool UseDepopulate { get; set; }
+
         //Methods used for reflection part
         private readonly MethodInfo _castMethod;
         private readonly MethodInfo _toListMethod;
@@ -54,11 +61,10 @@ namespace Core
         /// Create new repository
         /// </summary>
         /// <param name="database">The database used</param>
-        /// <param name="collection">The name of the collection, defaults to the name of the generic type in snake_case</param>
-        /// <exception cref="ArgumentException"></exception>
-        public Repository(IMongoDatabase database, string collection = null)
+        /// <param name="collection">The name of the collection, defaults to the name of the generic type in snake_case + s</param>
+        public MongoRepository(IMongoDatabase database, string collection = null)
         {
-            collection ??= typeof(T).Name.ToSnakeCase();
+            collection ??= typeof(T).Name.ToSnakeCase() + "s";
             _database = database;
             _populates = new Dictionary<string, bool>();
             
@@ -85,7 +91,7 @@ namespace Core
         /// <param name="message">The object to be logged</param>
         protected void Log(object message)
         {
-            if(Logging)
+            if(UseLogging)
                 Console.WriteLine(message);
         }
 
@@ -95,7 +101,7 @@ namespace Core
         /// <param name="t">The type to be evaluated</param>
         /// <param name="value">The instance to be filled</param>
         /// <param name="path">The current path. Please do not provide</param>
-        protected void PopulateHook(Type t, object value, string path = "")
+        private void PopulateHook(Type t, object value, string path = "")
         {
             Log("![T]! Checking " + t.Name + " at "+path);
             foreach (var prop in t.GetProperties())
@@ -118,14 +124,14 @@ namespace Core
                     //If reference attribute, check if it is enabled
                     if (attr is ReferenceAttribute refAttr)
                     {
-                        //Check if runtime populates must set the enabled propery or not
+                        //Check if runtime populates must set the enabled property or not
                         if (_populates.TryGetValue(path + prop.Name, out bool isEnabled))
                         {
                             Log("[CREF] Found override populate on "+prop.Name);
                             refAttr.Enabled = isEnabled;
                         }
                         
-                        //If not enabled, skip whole propery (ignore everything)
+                        //If not enabled, skip whole property (ignore everything)
                         if (!refAttr.Enabled)
                         {
                             Log("[XREF] Found disabled referenceAttribute, skipping");
@@ -133,11 +139,11 @@ namespace Core
                             break;
                         }
 
-                        //If the propery is already filled, we assume it is already populated
+                        //If the property is already filled, we assume it is already populated
                         //But we still need to check everything in it, so skip is not set
                         if (val != null)
                         {
-                            Log("[NREF] Property is already filled!");
+                            Log("[N-REF] Property is already filled!");
                             break;
                         }
 
@@ -154,9 +160,7 @@ namespace Core
                             break;
                         }
 
-                        //TODO support strings
                         //Convert ref(s) to ICollection of objectIds
-
                         var isRefCollection = refFieldValue.GetType().IsCollection(out Type refFieldType);
                         ICollection colRefs = isRefCollection
                             ? (ICollection)refFieldValue
@@ -199,7 +203,7 @@ namespace Core
                         
                         //Convert results to desired type
                         var cast = _castMethod.MakeGenericMethod(outputType);
-                        var castResults = cast.Invoke(null, new[] {queryResults});
+                        var castResults = cast.Invoke(null, new object[] {queryResults});
 
                         var toList = _toListMethod.MakeGenericMethod(outputType);
                         var results = toList.Invoke(null, new[] {castResults});
@@ -272,7 +276,7 @@ namespace Core
         /// </summary>
         /// <param name="t">The type to be evaluated</param>
         /// <param name="value">The value to be set</param>
-        protected void DepopulateHook(Type t, object value)
+        private void DepopulateHook(Type t, object value)
         {
             foreach (var prop in t.GetProperties())
             {
@@ -300,8 +304,24 @@ namespace Core
                     }
                     
                     //If reference attribute, set its value to null and do not run any recursion
-                    if (attr is ReferenceAttribute)
+                    if (attr is ReferenceAttribute refAttr)
                     {
+                        //TODO: depopulate hook now only works with strings
+                        if (UseDepopulate)
+                        {
+                            var refProp = t.GetProperty(refAttr.LocalField) ?? throw new ArgumentException("Failed to get property");
+                            var fieldValue = prop.GetValue(value) ?? throw new ArgumentException("Failed to get fieldValue");
+                        
+                            if (fieldValue.GetType().IsCollectionOf(typeof(Entity), out _))
+                            {
+                                refProp.SetValue(value, ((ICollection<Entity>)fieldValue).Select(x => x.Id).ToList());
+                            }
+                            else
+                            {
+                                refProp.SetValue(value, ((Entity)fieldValue).Id);
+                            }
+                        }
+                        
                         prop.SetValue(value, null);
                     }
                 }
@@ -312,12 +332,12 @@ namespace Core
         /// Shorthand for the population hook
         /// </summary>
         /// <param name="value">The value to be populated</param>
-        protected void PopulateHook(T value)
+        private void PopulateHook(T value)
         {
             if (!DoPopulate)
                 return;
             
-            PopulateHook(typeof(T), value);;
+            PopulateHook(typeof(T), value);
         }
 
         /// <summary>
@@ -325,7 +345,7 @@ namespace Core
         /// </summary>
         /// <param name="value">The value to be depopulated</param>
         /// <returns>Depopulated value</returns>
-        protected T DepopulateHook(T value)
+        private T DepopulateHook(T value)
         {
             if (!DoPopulate)
                 return value;
@@ -341,11 +361,10 @@ namespace Core
         /// <param name="aggregate">The aggregate to add the stages to</param>
         /// <param name="t">The type to reference</param>
         /// <param name="settings">The settings. Please leave empty, used in recursion</param>
-        protected void BuildAggregateHook(ref IAggregateFluent<BsonDocument> aggregate, Type t, AggregateSettings settings = null)
+        private void BuildAggregateHook(ref IAggregateFluent<BsonDocument> aggregate, Type t, AggregateSettings settings = null)
         {
-            if (settings == null)
-                settings = new AggregateSettings();
-            
+            settings ??= new AggregateSettings();
+
             foreach (var prop in t.GetProperties())
             {
                 Log("[AGG] Property "+ settings.GetPath(prop.Name));
@@ -354,7 +373,7 @@ namespace Core
                     //If reference attribute, add a lookup for it
                     if (attr is ReferenceAttribute refAttr)
                     {
-                        if (_populates.TryGetValue(settings.GetPath(prop.Name), out bool isEnabled))
+                        if (_populates.TryGetValue(settings.GetPath(prop.Name), out var isEnabled))
                             refAttr.Enabled = isEnabled;
                         
                         if(!refAttr.Enabled)
@@ -396,7 +415,7 @@ namespace Core
         /// <param name="target">The target field</param>
         /// <param name="parentType">The type of the parent (containing properties)</param>
         /// <param name="aggregate">The aggregate to be modified</param>
-        protected void AddGroupHook(string target, Type parentType, ref IAggregateFluent<BsonDocument> aggregate)
+        private void AddGroupHook(string target, Type parentType, ref IAggregateFluent<BsonDocument> aggregate)
         {
             var doc = new BsonDocument("_id", "$_id");
             
@@ -414,7 +433,7 @@ namespace Core
         /// Create an aggregate using the BuildAggregateHook to $lookup some fields before population
         /// </summary>
         /// <returns>IAggregateFluent of type T</returns>
-        protected IAggregateFluent<T> CreateAggregate()
+        private IAggregateFluent<T> CreateAggregate()
         {
             var aggregate = Collection.Aggregate().As<BsonDocument>();
             
@@ -428,34 +447,33 @@ namespace Core
         /// Sets a population change in the internal dictionary
         /// Used when populating, checks whether the attribute must be used
         /// </summary>
-        /// <param name="path">The path to be set, like User.Emails</param>
+        /// <param name="paths">The path to be set, like User.Emails</param>
         /// <param name="enabled">True to enable, false to disable</param>
-        private void SetPopulate(string path, bool enabled)
+        private void SetPopulate(bool enabled, params string[] paths)
         {
-            if (!_populates.TryAdd(path, enabled))
-                _populates[path] = enabled;
+            foreach (var path in paths)
+            {
+                if (!_populates.TryAdd(path, enabled))
+                    _populates[path] = enabled;
+            }
         }
 
         /// <summary>
         /// Override a specific reference attribute to be enabled in population
         /// </summary>
-        /// <param name="path">The object to be populated</param>
-        public void Populate(string path) => SetPopulate(path, true);
+        /// <param name="paths">The object(s) to be populated</param>
+        public void Populate(params string[] paths) => SetPopulate(true, paths);
         
         /// <summary>
         /// Override a specific reference attribute to be disabled in population
         /// </summary>
-        /// <param name="path">The object to be disabled</param>
-        public void Depopulate(string path) => SetPopulate(path, false);
+        /// <param name="paths">The object to be disabled</param>
+        public void Depopulate(params string[] paths) => SetPopulate(false, paths);
 
         /// <summary>
         /// Reset all populate attribute overrides
         /// </summary>
         public void ResetPopulates() => _populates.Clear();
-
-        /*
-         * CRUD methods
-         */
         
         /// <summary>
         /// Creates a filter for one item's ID
@@ -465,37 +483,27 @@ namespace Core
         public FilterDefinition<T> GetFilter(string id)
             => Builders<T>.Filter.Eq(x => x.Id, id);
 
-        //Create filters using JSON, BSON, expression or an object
-        protected FilterDefinition<T> CreateFilter(object obj)
-            => new ObjectFilterDefinition<T>(obj);
-        protected FilterDefinition<T> CreateFilter(string json)
-            => new JsonFilterDefinition<T>(json);
-        protected FilterDefinition<T> CreateFilter(Expression<Func<T, bool>> filter)
-            => new ExpressionFilterDefinition<T>(filter);
-        protected FilterDefinition<T> CreateFilter(BsonDocument filter)
-            => new BsonDocumentFilterDefinition<T>(filter);
-        
-        //Create updates using JSON, BSON or an object
-        protected UpdateDefinition<T> CreateUpdate(object obj)
-            => new ObjectUpdateDefinition<T>(obj);
-        protected UpdateDefinition<T> CreateUpdate(string json)
-            => new JsonUpdateDefinition<T>(json);
-        protected UpdateDefinition<T> CreateUpdate(BsonDocument filter)
-            => new BsonDocumentUpdateDefinition<T>(filter);
-        
+        /*
+         * CRUD methods
+         */
+
         /// <summary>
         /// Adds a document to the collection
         /// </summary>
         /// <param name="document">The document to be added</param>
         public void Insert(T document)
-            => Collection.InsertOne(document);
+        {
+            Collection.InsertOne(DepopulateHook(document));
+        }
 
         /// <summary>
         /// Add multiple documents to the collection
         /// </summary>
         /// <param name="documents">The documents to be added</param>
         public void InsertMany(params T[] documents)
-            => Collection.InsertMany(documents);
+        {
+            Collection.InsertMany(documents.Select(DepopulateHook));
+        }
 
         /// <summary>
         /// Get first item from collection matching a filter
@@ -505,7 +513,7 @@ namespace Core
         public T First(FilterDefinition<T> filter = null)
         {
             filter ??= FilterDefinition<T>.Empty;
-            var first = CreateAggregate().As<T>().Match(filter).FirstOrDefault();
+            var first = CreateAggregate().Match(filter).FirstOrDefault();
             if (first == null)
                 return null;
             
@@ -514,31 +522,6 @@ namespace Core
         }
 
         /// <summary>
-        /// Get first item in collection matching BsonDocument filter
-        /// </summary>
-        /// <param name="filter">The filter to apply</param>
-        /// <returns>The first item matching the filter or NULL</returns>
-        public T First(BsonDocument filter) => First(CreateFilter(filter));
-
-        /// <summary>
-        /// Get first document matching a filter expression
-        /// </summary>
-        /// <param name="filter">The filter to apply</param>
-        /// <returns>The first document in the collection matching the filter or NULL</returns>
-        public T First(Expression<Func<T, bool>> filter) => First(CreateFilter(filter));
-
-        public T First(object filter) => First(CreateFilter(filter));
-        public T First(string jsonFilter) => First(CreateFilter(jsonFilter));
-
-        /// <summary>
-        /// Get item by its Id
-        /// </summary>
-        /// <param name="id">The id to search for</param>
-        /// <returns>The item matching the id or null if not found</returns>
-        public T FindById(string id)
-            => First(GetFilter(id));
-        
-        /// <summary>
         /// Get all elements in collection matching a filter
         /// </summary>
         /// <param name="filter">The filter to check</param>
@@ -546,30 +529,13 @@ namespace Core
         public IEnumerable<T> Find(FilterDefinition<T> filter = null)
         {
             filter ??= FilterDefinition<T>.Empty;
-            var cur = CreateAggregate().As<T>().Match(filter).ToCursor();
+            var cur = CreateAggregate().Match(filter).ToCursor();
             foreach (var e in cur.ToEnumerable())
             {
                 PopulateHook(e);
                 yield return e;
             }
         }
-
-        /// <summary>
-        /// Get all documents in collection matching BsonDocument filter
-        /// </summary>
-        /// <param name="filter">The filter to apply</param>
-        /// <returns>The documents matching the filter</returns>
-        public IEnumerable<T> Find(BsonDocument filter) => Find(CreateFilter(filter));
-
-        /// <summary>
-        /// Get all documents in collection matching a filter expression
-        /// </summary>
-        /// <param name="filter">The filter to apply</param>
-        /// <returns>The documents matching the filter</returns>
-        public IEnumerable<T> Find(Expression<Func<T, bool>> filter) => Find(CreateFilter(filter));
-        
-        public IEnumerable<T> Find(object filter) => Find(CreateFilter(filter));
-        public IEnumerable<T> Find(string jsonFilter) => Find(CreateFilter(jsonFilter));
 
         /// <summary>
         /// Count all documents in collection matching optional filter
@@ -581,23 +547,6 @@ namespace Core
             filter ??= FilterDefinition<T>.Empty;
             return Collection.CountDocuments(filter);
         }
-
-        /// <summary>
-        /// Count documents matching a filter
-        /// </summary>
-        /// <param name="filter">The filter to apply</param>
-        /// <returns>The amount of documents matching the filter</returns>
-        public long Count(Expression<Func<T, bool>> filter) => Count(CreateFilter(filter));
-
-        /// <summary>
-        /// Count documents matching a BsonDocument filter
-        /// </summary>
-        /// <param name="filter">The filter to apply</param>
-        /// <returns>The amount of documents matching the filter</returns>
-        public long Count(BsonDocument filter) => Count(CreateFilter(filter));
-        
-        public long Count(object filter) => Count(CreateFilter(filter));
-        public long Count(string jsonFilter) => Count(CreateFilter(jsonFilter));
 
         /// <summary>
         /// Update document
@@ -619,14 +568,6 @@ namespace Core
         public bool Update(string id, UpdateDefinition<T> update)
             => Collection.UpdateOne(GetFilter(id), update).IsAcknowledged;
         
-        /// <summary>
-        /// Update one or more fields by an object
-        /// </summary>
-        /// <param name="id">The item to be updated</param>
-        /// <param name="update">The update definition object</param>
-        /// <returns>True if update is acknowledged</returns>
-        public bool Update(string id, object update) => Update(id, CreateUpdate(update));
-        public bool Update(string id, string json) => Update(id, CreateUpdate(json));
 
         /// <summary>
         /// Update many documents using filter and updateDefinition
@@ -658,21 +599,5 @@ namespace Core
             var res = Collection.DeleteMany(filter);
             return res.IsAcknowledged ? (int)res.DeletedCount : -1;
         }
-
-        /// <summary>
-        /// Delete all documents matching a filter
-        /// </summary>
-        /// <param name="filter">The filter to look for</param>
-        /// <returns>The amount of deleted documents. -1 if failed</returns>
-        public int DeleteMany(Expression<Func<T, bool>> filter)
-            => DeleteMany(new ExpressionFilterDefinition<T>(filter));
-
-        /// <summary>
-        /// Delete all documents matching a BsonDocument filter
-        /// </summary>
-        /// <param name="filter">The filter to look for</param>
-        /// <returns>The amount of deleted documents. -1 if failed</returns>
-        public int DeleteMany(BsonDocument filter)
-            => DeleteMany(new BsonDocumentFilterDefinition<T>(filter));
     }
 }

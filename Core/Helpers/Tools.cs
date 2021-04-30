@@ -29,12 +29,13 @@ namespace Core.Helpers
             elementType = check.GetElementType();
             return true;
         }
-        
+
         /// <summary>
         /// Get value in path in object. Does not support arrays/collections
         /// </summary>
         /// <param name="path">The path</param>
         /// <param name="obj">The object</param>
+        /// <param name="t">The type to be checked. Used for recursion. Optional, can be derived from obj</param>
         /// <returns>The value at the specific path</returns>
         public static object GetValue(string path, object obj, Type t = null)
         {
@@ -49,7 +50,7 @@ namespace Core.Helpers
             Console.WriteLine("[E] ATTR is null!");
             return null;
         }
-        
+
         /// <summary>
         /// Checks if type is an array or collection of a specific type
         /// </summary>

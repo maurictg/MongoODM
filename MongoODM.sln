@@ -2,7 +2,7 @@
 Microsoft Visual Studio Solution File, Format Version 12.00
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Core", "Core\Core.csproj", "{6F75A743-C3AC-4C88-95C3-9E56AEE082C6}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cli", "Cli\Cli.csproj", "{A1A55D15-2F04-4F3A-BB8D-298EAE59FE54}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cli", "Cli\Cli.csproj", "{A6E17352-376F-4B99-BECD-DFF25A7A68BE}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -18,5 +18,9 @@ Global
 		{A1A55D15-2F04-4F3A-BB8D-298EAE59FE54}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{A1A55D15-2F04-4F3A-BB8D-298EAE59FE54}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{A1A55D15-2F04-4F3A-BB8D-298EAE59FE54}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A6E17352-376F-4B99-BECD-DFF25A7A68BE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A6E17352-376F-4B99-BECD-DFF25A7A68BE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A6E17352-376F-4B99-BECD-DFF25A7A68BE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A6E17352-376F-4B99-BECD-DFF25A7A68BE}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal
