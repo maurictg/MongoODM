@@ -3,7 +3,7 @@ using System.Linq;
 
 namespace Core.Properties
 {
-    internal class AggregateSettings
+    public class AggregateSettings
     {
         public bool DoNest { get; set; } = true;
         public bool IsCollection { get; set; } = false;

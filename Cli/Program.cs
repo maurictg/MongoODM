@@ -1,13 +1,7 @@
 ﻿using System;
-using System.Collections;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.Linq;
-using System.Reflection;
-using System.Text.Json;
+using System.Threading.Tasks;
 using Core;
-using Core.Abstractions;
-using Core.Helpers;
 using MongoDB.Bson;
 using MongoDB.Driver;
 using MongoDB.Driver.Core.Events;
@@ -16,7 +10,7 @@ namespace Cli
 {
     class Program
     {
-        static void Main(string[] args)
+        static async Task Main(string[] args)
         {
             var url = new MongoUrl(
                 "mongodb://localhost:27017/?readPreference=primary&appname=MongoDB%20Compass&ssl=false");
@@ -30,30 +24,24 @@ namespace Cli
             
             var client = new MongoClient(mongoClientSettings);
             var db = client.GetDatabase("mongo_demo");
-            var repo = new Repository<User>(db, "users");
-            
+            var repo = new Repository<User>(db, "users")
+            {
+                Logging = false, 
+                UseLookup = false, 
+                DoPopulate = true
+            };
+
             //repo.Depopulate("Orders");
             //repo.Depopulate("Usernames.Emails");
-            repo.Logging = false;
 
-            repo.UseLookup = false;
-            repo.DoPopulate = true;
-
-            repo.Collection.Find(x => true).First();
 
             Console.WriteLine("Starting");
             
-            var sw = Stopwatch.StartNew();
-            var user = repo.FirstBeta();
-            Console.WriteLine(sw.Elapsed);
+            var first = repo.FindById("608bd8d802965973de535801");
+            Console.WriteLine(first.ToJson());
             
-            //About 0.02 - 0.076 - 0.09 (with aggregate)
-            //The aggregate seems to be slower!
-            
-            Console.WriteLine(user.ToJson());
 
-
-            //Console.WriteLine(repo.FirstBeta().ToJson());
+            //Console.WriteLine(repo.First().ToJson());
 
 
 

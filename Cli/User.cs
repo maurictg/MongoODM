@@ -19,5 +19,10 @@ namespace Cli
         
         [BsonRepresentation(BsonType.ObjectId)]
         public List<string> OrderRefs { get; set; }
+        
+        [Reference("products", "CartRefs", autoPopulate:true)]
+        public List<Product> ShoppingCart { get; set; }
+        
+        public List<string> CartRefs { get; set; }
     }
 }

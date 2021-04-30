@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Linq.Expressions;
 using System.Reflection;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -18,8 +19,8 @@ namespace Core
 {
     public class Repository<T> where T : Entity
     {
-        private readonly IMongoDatabase _database;
-        private readonly Dictionary<string, bool> _populates;
+        protected readonly IMongoDatabase _database;
+        protected readonly Dictionary<string, bool> _populates;
         
         /// <summary>
         /// The mongoCollection that is used in the repository
@@ -34,9 +35,9 @@ namespace Core
         /// <summary>
         /// Indicates if you want to use an aggregate to $lookup some fields before population
         /// This reduces the amount of queries created during population
-        /// The $lookup is less performant than just the DoPopulate, which uses $in.
+        /// The $lookup is less performant than just the DoPopulate that uses $in.
         /// </summary>
-        public bool UseLookup { get; set; } = false;
+        public bool UseLookup { get; set; }
 
         /// <summary>
         /// Indicates if you want to allow MongoODM to populate user-defined fields, decorated by attributes like [Embed] or [Reference]
@@ -63,7 +64,6 @@ namespace Core
             
             Collection = _database.GetCollection<T>(collection);
 
-
             //Get reflection methods
             _castMethod = typeof(Enumerable).GetMethod(nameof(Enumerable.Cast)) ??
                           throw new ArgumentException("Failed to get cast method");
@@ -79,7 +79,11 @@ namespace Core
                 .First(x => x.IsGenericMethod);
         }
 
-        private void Log(object message)
+        /// <summary>
+        /// Logger helper Logs message to console in debug, when logging is enabled
+        /// </summary>
+        /// <param name="message">The object to be logged</param>
+        protected void Log(object message)
         {
             if(Logging)
                 Console.WriteLine(message);
@@ -91,7 +95,7 @@ namespace Core
         /// <param name="t">The type to be evaluated</param>
         /// <param name="value">The instance to be filled</param>
         /// <param name="path">The current path. Please do not provide</param>
-        private void PopulateHook(Type t, object value, string path = "")
+        protected void PopulateHook(Type t, object value, string path = "")
         {
             Log("![T]! Checking " + t.Name + " at "+path);
             foreach (var prop in t.GetProperties())
@@ -154,24 +158,24 @@ namespace Core
                         //Convert ref(s) to ICollection of objectIds
 
                         var isRefCollection = refFieldValue.GetType().IsCollection(out Type refFieldType);
-                        ICollection _refs = isRefCollection
+                        ICollection colRefs = isRefCollection
                             ? (ICollection)refFieldValue
                             : new List<object> {refFieldValue};
 
-                        var __refs = new List<object>();
-                        var _e = _refs.GetEnumerator();
-                        while (_e.MoveNext())
-                            __refs.Add(_e.Current);
+                        var listRefs = new List<object>();
+                        var listEnum = colRefs.GetEnumerator();
+                        while (listEnum.MoveNext())
+                            listRefs.Add(listEnum.Current);
                         
-                        ICollection<ObjectId> refs = null;
+                        ICollection<ObjectId> refs;
                         
                         switch (refFieldType.Name)
                         {
                             case "String":
-                                refs = __refs.Select(x => ObjectId.Parse((string) x)).ToList();
+                                refs = listRefs.Select(x => ObjectId.Parse((string) x)).ToList();
                                 break;
                             case "ObjectId":
-                                refs = __refs.Select(x => (ObjectId)x).ToList();
+                                refs = listRefs.Select(x => (ObjectId)x).ToList();
                                 break;
                             default:
                                 throw new ArgumentException("Only strings and ObjectId are accepted as key");
@@ -268,11 +272,11 @@ namespace Core
         /// </summary>
         /// <param name="t">The type to be evaluated</param>
         /// <param name="value">The value to be set</param>
-        private void DepopulateHook(Type t, object value)
+        protected void DepopulateHook(Type t, object value)
         {
             foreach (var prop in t.GetProperties())
             {
-                Console.WriteLine("[P] Checking "+prop.Name);
+                Console.WriteLine("[DP] Checking "+prop.Name);
                 foreach (var attr in prop.GetCustomAttributes())
                 {
                     //If embed attribute, check if collection
@@ -308,7 +312,7 @@ namespace Core
         /// Shorthand for the population hook
         /// </summary>
         /// <param name="value">The value to be populated</param>
-        private void PopulateHook(T value)
+        protected void PopulateHook(T value)
         {
             if (!DoPopulate)
                 return;
@@ -321,7 +325,7 @@ namespace Core
         /// </summary>
         /// <param name="value">The value to be depopulated</param>
         /// <returns>Depopulated value</returns>
-        private T DepopulateHook(T value)
+        protected T DepopulateHook(T value)
         {
             if (!DoPopulate)
                 return value;
@@ -337,7 +341,7 @@ namespace Core
         /// <param name="aggregate">The aggregate to add the stages to</param>
         /// <param name="t">The type to reference</param>
         /// <param name="settings">The settings. Please leave empty, used in recursion</param>
-        private void BuildAggregateHook(ref IAggregateFluent<BsonDocument> aggregate, Type t, AggregateSettings settings = null)
+        protected void BuildAggregateHook(ref IAggregateFluent<BsonDocument> aggregate, Type t, AggregateSettings settings = null)
         {
             if (settings == null)
                 settings = new AggregateSettings();
@@ -392,7 +396,7 @@ namespace Core
         /// <param name="target">The target field</param>
         /// <param name="parentType">The type of the parent (containing properties)</param>
         /// <param name="aggregate">The aggregate to be modified</param>
-        private void AddGroupHook(string target, Type parentType, ref IAggregateFluent<BsonDocument> aggregate)
+        protected void AddGroupHook(string target, Type parentType, ref IAggregateFluent<BsonDocument> aggregate)
         {
             var doc = new BsonDocument("_id", "$_id");
             
@@ -410,7 +414,7 @@ namespace Core
         /// Create an aggregate using the BuildAggregateHook to $lookup some fields before population
         /// </summary>
         /// <returns>IAggregateFluent of type T</returns>
-        private IAggregateFluent<T> CreateAggregate()
+        protected IAggregateFluent<T> CreateAggregate()
         {
             var aggregate = Collection.Aggregate().As<BsonDocument>();
             
@@ -419,14 +423,6 @@ namespace Core
             
             return aggregate.As<T>();
         }
-
-        /// <summary>
-        /// Creates a filter for one item's ID
-        /// </summary>
-        /// <param name="id">The id to be filtered</param>
-        /// <returns>Filter</returns>
-        private FilterDefinition<T> GetFilter(string id)
-            => Builders<T>.Filter.Eq(x => x.Id, id);
 
         /// <summary>
         /// Sets a population change in the internal dictionary
@@ -455,33 +451,228 @@ namespace Core
         /// <summary>
         /// Reset all populate attribute overrides
         /// </summary>
-        public void ResetPopulates()
+        public void ResetPopulates() => _populates.Clear();
+
+        /*
+         * CRUD methods
+         */
+        
+        /// <summary>
+        /// Creates a filter for one item's ID
+        /// </summary>
+        /// <param name="id">The id to be filtered</param>
+        /// <returns>Filter</returns>
+        public FilterDefinition<T> GetFilter(string id)
+            => Builders<T>.Filter.Eq(x => x.Id, id);
+
+        //Create filters using JSON, BSON, expression or an object
+        protected FilterDefinition<T> CreateFilter(object obj)
+            => new ObjectFilterDefinition<T>(obj);
+        protected FilterDefinition<T> CreateFilter(string json)
+            => new JsonFilterDefinition<T>(json);
+        protected FilterDefinition<T> CreateFilter(Expression<Func<T, bool>> filter)
+            => new ExpressionFilterDefinition<T>(filter);
+        protected FilterDefinition<T> CreateFilter(BsonDocument filter)
+            => new BsonDocumentFilterDefinition<T>(filter);
+        
+        //Create updates using JSON, BSON or an object
+        protected UpdateDefinition<T> CreateUpdate(object obj)
+            => new ObjectUpdateDefinition<T>(obj);
+        protected UpdateDefinition<T> CreateUpdate(string json)
+            => new JsonUpdateDefinition<T>(json);
+        protected UpdateDefinition<T> CreateUpdate(BsonDocument filter)
+            => new BsonDocumentUpdateDefinition<T>(filter);
+        
+        /// <summary>
+        /// Adds a document to the collection
+        /// </summary>
+        /// <param name="document">The document to be added</param>
+        public void Insert(T document)
+            => Collection.InsertOne(document);
+
+        /// <summary>
+        /// Add multiple documents to the collection
+        /// </summary>
+        /// <param name="documents">The documents to be added</param>
+        public void InsertMany(params T[] documents)
+            => Collection.InsertMany(documents);
+
+        /// <summary>
+        /// Get first item from collection matching a filter
+        /// </summary>
+        /// <param name="filter">The filter to apply</param>
+        /// <returns>The first element matching the filter or NULL</returns>
+        public T First(FilterDefinition<T> filter = null)
         {
-            _populates.Clear();
-        }
-
-        //How-to with async and await? Can i run async from sync method?
-        //https://docs.microsoft.com/en-us/dotnet/csharp/programming-guide/concepts/async/
-
-        //Methods, methods, methods
-
-        //In progress method
-        public T FirstBeta()
-        {
-            var first = CreateAggregate().Limit(1).As<T>().First();
+            filter ??= FilterDefinition<T>.Empty;
+            var first = CreateAggregate().As<T>().Match(filter).FirstOrDefault();
+            if (first == null)
+                return null;
+            
             PopulateHook(first);
             return first;
         }
 
-        public T First()
+        /// <summary>
+        /// Get first item in collection matching BsonDocument filter
+        /// </summary>
+        /// <param name="filter">The filter to apply</param>
+        /// <returns>The first item matching the filter or NULL</returns>
+        public T First(BsonDocument filter) => First(CreateFilter(filter));
+
+        /// <summary>
+        /// Get first document matching a filter expression
+        /// </summary>
+        /// <param name="filter">The filter to apply</param>
+        /// <returns>The first document in the collection matching the filter or NULL</returns>
+        public T First(Expression<Func<T, bool>> filter) => First(CreateFilter(filter));
+
+        public T First(object filter) => First(CreateFilter(filter));
+        public T First(string jsonFilter) => First(CreateFilter(jsonFilter));
+
+        /// <summary>
+        /// Get item by its Id
+        /// </summary>
+        /// <param name="id">The id to search for</param>
+        /// <returns>The item matching the id or null if not found</returns>
+        public T FindById(string id)
+            => First(GetFilter(id));
+        
+        /// <summary>
+        /// Get all elements in collection matching a filter
+        /// </summary>
+        /// <param name="filter">The filter to check</param>
+        /// <returns>All elements matching filter</returns>
+        public IEnumerable<T> Find(FilterDefinition<T> filter = null)
         {
-            return Collection.Aggregate().Limit(1).First();
+            filter ??= FilterDefinition<T>.Empty;
+            var cur = CreateAggregate().As<T>().Match(filter).ToCursor();
+            foreach (var e in cur.ToEnumerable())
+            {
+                PopulateHook(e);
+                yield return e;
+            }
         }
 
-        /*
-         * CRUD methods
-         *
-         * TODO: make wrapper, like DbSet<>
-         */
+        /// <summary>
+        /// Get all documents in collection matching BsonDocument filter
+        /// </summary>
+        /// <param name="filter">The filter to apply</param>
+        /// <returns>The documents matching the filter</returns>
+        public IEnumerable<T> Find(BsonDocument filter) => Find(CreateFilter(filter));
+
+        /// <summary>
+        /// Get all documents in collection matching a filter expression
+        /// </summary>
+        /// <param name="filter">The filter to apply</param>
+        /// <returns>The documents matching the filter</returns>
+        public IEnumerable<T> Find(Expression<Func<T, bool>> filter) => Find(CreateFilter(filter));
+        
+        public IEnumerable<T> Find(object filter) => Find(CreateFilter(filter));
+        public IEnumerable<T> Find(string jsonFilter) => Find(CreateFilter(jsonFilter));
+
+        /// <summary>
+        /// Count all documents in collection matching optional filter
+        /// </summary>
+        /// <param name="filter">Optional: filter</param>
+        /// <returns>The amount of documents matching a filter</returns>
+        public long Count(FilterDefinition<T> filter = null)
+        {
+            filter ??= FilterDefinition<T>.Empty;
+            return Collection.CountDocuments(filter);
+        }
+
+        /// <summary>
+        /// Count documents matching a filter
+        /// </summary>
+        /// <param name="filter">The filter to apply</param>
+        /// <returns>The amount of documents matching the filter</returns>
+        public long Count(Expression<Func<T, bool>> filter) => Count(CreateFilter(filter));
+
+        /// <summary>
+        /// Count documents matching a BsonDocument filter
+        /// </summary>
+        /// <param name="filter">The filter to apply</param>
+        /// <returns>The amount of documents matching the filter</returns>
+        public long Count(BsonDocument filter) => Count(CreateFilter(filter));
+        
+        public long Count(object filter) => Count(CreateFilter(filter));
+        public long Count(string jsonFilter) => Count(CreateFilter(jsonFilter));
+
+        /// <summary>
+        /// Update document
+        /// </summary>
+        /// <param name="document">The document to be updated</param>
+        /// <returns>The updated document</returns>
+        public T Update(T document)
+        {
+            var doc = DepopulateHook(document);
+            return Collection.FindOneAndReplace(GetFilter(doc.Id), doc);
+        }
+
+        /// <summary>
+        /// Update one or more fields by Id
+        /// </summary>
+        /// <param name="id">The object to be updated</param>
+        /// <param name="update">The update to apply</param>
+        /// <returns>True if update is acknowledged</returns>
+        public bool Update(string id, UpdateDefinition<T> update)
+            => Collection.UpdateOne(GetFilter(id), update).IsAcknowledged;
+        
+        /// <summary>
+        /// Update one or more fields by an object
+        /// </summary>
+        /// <param name="id">The item to be updated</param>
+        /// <param name="update">The update definition object</param>
+        /// <returns>True if update is acknowledged</returns>
+        public bool Update(string id, object update) => Update(id, CreateUpdate(update));
+        public bool Update(string id, string json) => Update(id, CreateUpdate(json));
+
+        /// <summary>
+        /// Update many documents using filter and updateDefinition
+        /// </summary>
+        /// <param name="filter">The filter to apply</param>
+        /// <param name="update">The update</param>
+        /// <returns>UpdateResult</returns>
+        public UpdateResult UpdateMany(FilterDefinition<T> filter, UpdateDefinition<T> update)
+            => Collection.UpdateMany(filter, update);
+
+        /// <summary>
+        /// Delete an object by its id
+        /// </summary>
+        /// <param name="id">The id of the object to be deleted</param>
+        /// <returns>True if delete is acknowledged</returns>
+        public bool Delete(string id)
+        {
+            var res = Collection.DeleteOne(GetFilter(id));
+            return res.IsAcknowledged;
+        }
+
+        /// <summary>
+        /// Delete all documents matching a filter
+        /// </summary>
+        /// <param name="filter">The filter to look for</param>
+        /// <returns>The amount of deleted documents. -1 if failed</returns>
+        public int DeleteMany(FilterDefinition<T> filter)
+        {
+            var res = Collection.DeleteMany(filter);
+            return res.IsAcknowledged ? (int)res.DeletedCount : -1;
+        }
+
+        /// <summary>
+        /// Delete all documents matching a filter
+        /// </summary>
+        /// <param name="filter">The filter to look for</param>
+        /// <returns>The amount of deleted documents. -1 if failed</returns>
+        public int DeleteMany(Expression<Func<T, bool>> filter)
+            => DeleteMany(new ExpressionFilterDefinition<T>(filter));
+
+        /// <summary>
+        /// Delete all documents matching a BsonDocument filter
+        /// </summary>
+        /// <param name="filter">The filter to look for</param>
+        /// <returns>The amount of deleted documents. -1 if failed</returns>
+        public int DeleteMany(BsonDocument filter)
+            => DeleteMany(new BsonDocumentFilterDefinition<T>(filter));
     }
 }
