@@ -21,9 +21,27 @@ namespace Core
         private readonly IMongoDatabase _database;
         private readonly Dictionary<string, bool> _populates;
         
+        /// <summary>
+        /// The mongoCollection that is used in the repository
+        /// </summary>
         public IMongoCollection<T> Collection { get; }
 
-        public bool Logging { get; set; } = true;
+        /// <summary>
+        /// Enables/disables logging to the console
+        /// </summary>
+        public bool Logging { get; set; }
+
+        /// <summary>
+        /// Indicates if you want to use an aggregate to $lookup some fields before population
+        /// This reduces the amount of queries created during population
+        /// The $lookup is less performant than just the DoPopulate, which uses $in.
+        /// </summary>
+        public bool UseLookup { get; set; } = false;
+
+        /// <summary>
+        /// Indicates if you want to allow MongoODM to populate user-defined fields, decorated by attributes like [Embed] or [Reference]
+        /// </summary>
+        public bool DoPopulate { get; set; } = true;
         
         //Methods used for reflection part
         private readonly MethodInfo _castMethod;
@@ -132,10 +150,32 @@ namespace Core
                             break;
                         }
 
+                        //TODO support strings
                         //Convert ref(s) to ICollection of objectIds
-                        var refs = !refFieldValue.GetType().IsCollection(out _)
-                            ? new List<ObjectId> {(ObjectId) refFieldValue}
-                            : (ICollection<ObjectId>) refFieldValue;
+
+                        var isRefCollection = refFieldValue.GetType().IsCollection(out Type refFieldType);
+                        ICollection _refs = isRefCollection
+                            ? (ICollection)refFieldValue
+                            : new List<object> {refFieldValue};
+
+                        var __refs = new List<object>();
+                        var _e = _refs.GetEnumerator();
+                        while (_e.MoveNext())
+                            __refs.Add(_e.Current);
+                        
+                        ICollection<ObjectId> refs = null;
+                        
+                        switch (refFieldType.Name)
+                        {
+                            case "String":
+                                refs = __refs.Select(x => ObjectId.Parse((string) x)).ToList();
+                                break;
+                            case "ObjectId":
+                                refs = __refs.Select(x => (ObjectId)x).ToList();
+                                break;
+                            default:
+                                throw new ArgumentException("Only strings and ObjectId are accepted as key");
+                        }
 
                         //Lookup document
                         var refCollection = _database.GetCollection<BsonDocument>(refAttr.RefCollection);
@@ -269,7 +309,12 @@ namespace Core
         /// </summary>
         /// <param name="value">The value to be populated</param>
         private void PopulateHook(T value)
-            => PopulateHook(typeof(T), value);
+        {
+            if (!DoPopulate)
+                return;
+            
+            PopulateHook(typeof(T), value);;
+        }
 
         /// <summary>
         /// Shorthand for the depopulation hook.
@@ -278,18 +323,20 @@ namespace Core
         /// <returns>Depopulated value</returns>
         private T DepopulateHook(T value)
         {
+            if (!DoPopulate)
+                return value;
+            
             var val = value.Clone();
             DepopulateHook(typeof(T), val);
             return (T)val;
         }
         
-        /*
-         * IN PROGRESS
-         */
-
-        
-        // !! IN PROGRESS !!: Integrate in PopulateHook when done could increase performance
-        //TODO: make this working, and try more complex pattern like business case ecommerce
+        /// <summary>
+        /// Creates an aggregate hook to lookup some fields before population
+        /// </summary>
+        /// <param name="aggregate">The aggregate to add the stages to</param>
+        /// <param name="t">The type to reference</param>
+        /// <param name="settings">The settings. Please leave empty, used in recursion</param>
         private void BuildAggregateHook(ref IAggregateFluent<BsonDocument> aggregate, Type t, AggregateSettings settings = null)
         {
             if (settings == null)
@@ -319,6 +366,7 @@ namespace Core
                             aggregate = aggregate.Unwind(targetField);
                     }
 
+                    //If embed, create aggregate for it
                     if (attr is EmbedAttribute)
                     {
                         if(!settings.DoNest)
@@ -326,6 +374,7 @@ namespace Core
                         
                         bool isCollection = prop.PropertyType.IsCollection(out Type elementType);
 
+                        //If collection, add $unwind
                         if (isCollection)
                             aggregate = aggregate.Unwind(settings.GetPath(prop.Name));
 
@@ -337,6 +386,12 @@ namespace Core
             }
         }
 
+        /// <summary>
+        /// Add an automated $group stage to an existing aggregate
+        /// </summary>
+        /// <param name="target">The target field</param>
+        /// <param name="parentType">The type of the parent (containing properties)</param>
+        /// <param name="aggregate">The aggregate to be modified</param>
         private void AddGroupHook(string target, Type parentType, ref IAggregateFluent<BsonDocument> aggregate)
         {
             var doc = new BsonDocument("_id", "$_id");
@@ -351,10 +406,17 @@ namespace Core
             aggregate = aggregate.Group(doc);
         }
         
+        /// <summary>
+        /// Create an aggregate using the BuildAggregateHook to $lookup some fields before population
+        /// </summary>
+        /// <returns>IAggregateFluent of type T</returns>
         private IAggregateFluent<T> CreateAggregate()
         {
             var aggregate = Collection.Aggregate().As<BsonDocument>();
-            BuildAggregateHook(ref aggregate, typeof(T));
+            
+            if(UseLookup)
+                BuildAggregateHook(ref aggregate, typeof(T));
+            
             return aggregate.As<T>();
         }
 
@@ -363,7 +425,7 @@ namespace Core
         /// </summary>
         /// <param name="id">The id to be filtered</param>
         /// <returns>Filter</returns>
-        private FilterDefinition<T> GetFilter(ObjectId id)
+        private FilterDefinition<T> GetFilter(string id)
             => Builders<T>.Filter.Eq(x => x.Id, id);
 
         /// <summary>

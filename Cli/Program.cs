@@ -1,7 +1,9 @@
 ﻿using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Reflection;
 using System.Text.Json;
 using Core;
 using Core.Abstractions;
@@ -12,27 +14,6 @@ using MongoDB.Driver.Core.Events;
 
 namespace Cli
 {
-    abstract class Extend : IEntity
-    {
-        
-    }
-    class Obj2 : Extend
-    {
-        public string Name { get; set; }
-        public List<Obj3> Obj3List { get; set; }
-    }
-
-    class Obj3 : Extend
-    {
-        public int Age { get; set; }
-    }
-    
-    class Obj1 : Extend
-    {
-        public Obj2[] Obj2Array { get; set; }    
-        public List<Obj2> Obj2List { get; set; }   
-    }
-    
     class Program
     {
         static void Main(string[] args)
@@ -43,7 +24,7 @@ namespace Cli
             var mongoClientSettings = MongoClientSettings.FromUrl(url);
             mongoClientSettings.ClusterConfigurator = cb => {
                 cb.Subscribe<CommandStartedEvent>(e => {
-                    Console.WriteLine($"[MONGO] {e.CommandName} - {e.Command.ToJson()}");
+                    //Console.WriteLine($"[MONGO] {e.CommandName} - {e.Command.ToJson()}");
                 });
             };
             
@@ -51,28 +32,28 @@ namespace Cli
             var db = client.GetDatabase("mongo_demo");
             var repo = new Repository<User>(db, "users");
             
-            repo.Depopulate("Orders");
-            repo.Depopulate("Usernames.Emails");
+            //repo.Depopulate("Orders");
+            //repo.Depopulate("Usernames.Emails");
             repo.Logging = false;
 
-            Stopwatch sw = Stopwatch.StartNew();
+            repo.UseLookup = false;
+            repo.DoPopulate = true;
+
+            repo.Collection.Find(x => true).First();
+
+            Console.WriteLine("Starting");
             
-            sw.Restart();
-
-            var user0 = repo.First();
-            Console.WriteLine(sw.Elapsed);
-
+            var sw = Stopwatch.StartNew();
             var user = repo.FirstBeta();
             Console.WriteLine(sw.Elapsed);
-            sw.Restart();
             
-            var user1 = repo.FirstBeta();
-            Console.WriteLine(sw.Elapsed);
-            sw.Restart();
+            //About 0.02 - 0.076 - 0.09 (with aggregate)
+            //The aggregate seems to be slower!
+            
+            Console.WriteLine(user.ToJson());
 
-            var user2 = repo.First();
-            Console.WriteLine(sw.Elapsed);
 
+            //Console.WriteLine(repo.FirstBeta().ToJson());
 
 
 

@@ -1,6 +1,7 @@
 using Core.Abstractions;
 using Core.Attributes;
 using MongoDB.Bson;
+using MongoDB.Bson.Serialization.Attributes;
 
 namespace Cli
 {
@@ -11,6 +12,7 @@ namespace Cli
         [Reference("companies", "CompanyRef", autoPopulate: true)]
         public Company Company { get; set; }
         
-        public ObjectId CompanyRef { get; set; }
+        [BsonRepresentation(BsonType.ObjectId)]
+        public string CompanyRef { get; set; }
     }
 }

@@ -10,22 +10,22 @@ namespace Core.Attributes
         /// <summary>
         /// The referenced collection
         /// </summary>
-        public string RefCollection { get; set; }
+        public string RefCollection { get; }
         
         /// <summary>
         /// The referenced field. Defaults to _id
         /// </summary>
-        public string RefField { get; private set; }
+        public string RefField { get; }
         
         /// <summary>
         /// The local field containing the Id's
         /// </summary>
-        public string LocalField { get; private set; }
+        public string LocalField { get; }
         
         /// <summary>
         /// Indicates if mongoODM has to auto populate this field. Defaults to false
         /// </summary>
-        public bool AutoPopulate { get; private set; }
+        public bool AutoPopulate { get; }
         
         /// <summary>
         /// Indicates if reference is enabled (populated). Defaults to true when AutoPopulate is on

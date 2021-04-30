@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Core;
 using Core.Attributes;
 using MongoDB.Bson;
+using MongoDB.Bson.Serialization.Attributes;
 
 namespace Cli
 {
@@ -16,6 +17,7 @@ namespace Cli
         [Reference("orders", "OrderRefs", autoPopulate: true)]
         public Order[] Orders { get; set; }
         
-        public List<ObjectId> OrderRefs { get; set; }
+        [BsonRepresentation(BsonType.ObjectId)]
+        public List<string> OrderRefs { get; set; }
     }
 }

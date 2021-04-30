@@ -3,6 +3,7 @@ using Core;
 using Core.Abstractions;
 using Core.Attributes;
 using MongoDB.Bson;
+using MongoDB.Bson.Serialization.Attributes;
 
 namespace Cli
 {
@@ -13,6 +14,8 @@ namespace Cli
         
         [Reference("emails", "EmailRefs", autoPopulate: true)]
         public List<Email> Emails { get; set; }
-        public List<ObjectId> EmailRefs { get; set; }
+        
+        [BsonRepresentation(BsonType.ObjectId)]
+        public List<string> EmailRefs { get; set; }
     }
 }

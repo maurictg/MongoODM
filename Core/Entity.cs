@@ -1,3 +1,5 @@
+using System;
+using System.Dynamic;
 using Core.Abstractions;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
@@ -15,13 +17,15 @@ namespace Core
         /// <summary>
         /// Represents MongoDB _id
         /// </summary>
-        public ObjectId Id { get; set; }
+        [BsonId]
+        [BsonRepresentation(BsonType.ObjectId)]
+        public string Id { get; set; }
 
         /// <summary>
         /// Deep clone entity, thanks to serialization
         /// </summary>
         /// <returns>Deep cloned entity</returns>
-        public Entity Clone()
+        public IEntity Clone()
             => BsonSerializer.Deserialize<Entity>(this.ToBson());
     }
 }
