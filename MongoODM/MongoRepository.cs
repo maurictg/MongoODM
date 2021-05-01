@@ -3,15 +3,15 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
-using Core.Abstractions;
-using Core.Attributes;
-using Core.Helpers;
 using Core.Properties;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
+using MongoODM.Abstractions;
+using MongoODM.Attributes;
+using MongoODM.Helpers;
 
-namespace Core
+namespace MongoODM
 {
     /// <summary>
     /// The repository base class. Contains the population mechanism and shorthands/helpers for the Mongo API.
@@ -280,17 +280,24 @@ namespace Core
         {
             foreach (var prop in t.GetProperties())
             {
-                Console.WriteLine("[DP] Checking "+prop.Name);
+                Log("[DP] Checking "+prop.Name);
                 foreach (var attr in prop.GetCustomAttributes())
                 {
                     //If embed attribute, check if collection
                     if (attr is EmbedAttribute)
                     {
+                        var val = prop.GetValue(value);
+                        if (val == null)
+                        {
+                            Log("[DPE] value is null");
+                            continue;
+                        }
+                        
                         //If collection, foreach it into the hook recursively
                         if (prop.PropertyType.IsCollection(out t))
                         {
                             var cast = _castMethod.MakeGenericMethod(t);
-                            var casted = cast.Invoke(null, new[] {prop.GetValue(value)});
+                            var casted = cast.Invoke(null, new[] {val});
                             if (casted != null)
                             {
                                 foreach (var c in (IEnumerable) casted)
@@ -299,7 +306,7 @@ namespace Core
                         }
                         else //If not, run the populate hook on the single property
                         {
-                            DepopulateHook(t, prop.GetValue(value));
+                            DepopulateHook(t, val);
                         }
                     }
                     

@@ -1,4 +1,4 @@
-namespace Core.Abstractions
+namespace MongoODM.Abstractions
 {
     /// <summary>
     /// The Entity base class

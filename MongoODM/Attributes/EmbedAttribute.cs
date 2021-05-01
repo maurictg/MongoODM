@@ -1,7 +1,7 @@
 using System;
-using Core.Abstractions;
+using MongoODM.Abstractions;
 
-namespace Core.Attributes
+namespace MongoODM.Attributes
 {
     [AttributeUsage(AttributeTargets.Property)]
     public class EmbedAttribute : Attribute, IMongoAttribute

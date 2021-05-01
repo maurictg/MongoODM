@@ -3,7 +3,7 @@ using System.Collections;
 using System.Linq;
 using System.Text;
 
-namespace Core.Helpers
+namespace MongoODM.Helpers
 {
     internal static class Tools
     {

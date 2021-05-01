@@ -1,8 +1,8 @@
 using System;
-using Core.Abstractions;
 using MongoDB.Bson.Serialization.Attributes;
+using MongoODM.Abstractions;
 
-namespace Core.Attributes
+namespace MongoODM.Attributes
 {
     [AttributeUsage(AttributeTargets.Property)]
     public class ReferenceAttribute : BsonIgnoreIfNullAttribute, IMongoAttribute

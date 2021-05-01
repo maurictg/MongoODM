@@ -4,7 +4,7 @@ using System.Linq.Expressions;
 using MongoDB.Bson;
 using MongoDB.Driver;
 
-namespace Core.Abstractions
+namespace MongoODM.Abstractions
 {
     /// <summary>
     /// The instance base of the MongoRepository. You can create your own implementation using this interface, or use this for DI

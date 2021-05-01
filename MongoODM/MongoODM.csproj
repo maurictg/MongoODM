@@ -2,16 +2,18 @@
 
     <PropertyGroup>
         <TargetFramework>net5.0</TargetFramework>
-        <PackageId>MongoODM.Core</PackageId>
+        <PackageId>MongoODM</PackageId>
         <Title>MongoODM Core</Title>
         <Authors>maurictg</Authors>
         <Description>MongoDB ODM (Object-Document-Mapper)</Description>
         <Copyright>2021 Maurict</Copyright>
         <PackageProjectUrl>https://github.com/maurictg/MongoODM</PackageProjectUrl>
-        <PackageLicenseUrl>https://github.com/maurictg/MongoODM/blob/master/LICENSE</PackageLicenseUrl>
+        <PackageLicenseExpression>MIT</PackageLicenseExpression>
         <RepositoryUrl>https://github.com/maurictg/MongoODM</RepositoryUrl>
         <PackageTags>MongoDB ORM ODM Relations Populate</PackageTags>
         <PackageReleaseNotes>First version, some features are still in beta.</PackageReleaseNotes>
+        <AssemblyName>MongoODM</AssemblyName>
+        <RootNamespace>MongoODM</RootNamespace>
     </PropertyGroup>
 
     <ItemGroup>

@@ -1,9 +1,9 @@
-using Core.Abstractions;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Bson.Serialization.Attributes;
+using MongoODM.Abstractions;
 
-namespace Core
+namespace MongoODM
 {
     /// <summary>
     /// The mongoDB entity class
