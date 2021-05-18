@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Bson.Serialization.Attributes;
@@ -23,6 +24,7 @@ namespace MongoODM
         /// Gets the mongoDb ObjectId instead of the string value
         /// </summary>
         [BsonIgnore] 
+        [JsonIgnore]
         public ObjectId ObjectId => new(Id);
 
         /// <summary>

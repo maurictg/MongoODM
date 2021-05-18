@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq.Expressions;
+using System.Threading.Tasks;
 using MongoDB.Bson;
 using MongoDB.Driver;
 
@@ -57,6 +58,12 @@ namespace MongoODM.Abstractions
         /// Reset all populate attribute overrides
         /// </summary>
         public void ResetPopulates();
+
+        /// <summary>
+        /// Create indexes used in model if they do not exist
+        /// </summary>
+        /// <returns>Task</returns>
+        public Task CreateIndexesAsync();
         
         /*
          * CRUD methods

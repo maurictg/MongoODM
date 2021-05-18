@@ -14,6 +14,7 @@
         <PackageReleaseNotes>First version, some features are still in beta.</PackageReleaseNotes>
         <AssemblyName>MongoODM</AssemblyName>
         <RootNamespace>MongoODM</RootNamespace>
+        <PackageVersion>1.0.1</PackageVersion>
     </PropertyGroup>
 
     <ItemGroup>

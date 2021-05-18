@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Threading.Tasks;
 using Core.Properties;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
@@ -21,6 +22,7 @@ namespace MongoODM
     {
         private readonly IMongoDatabase _database;
         private readonly Dictionary<string, bool> _populates;
+        private readonly List<CreateIndexModel<T>> _indices;
         
         /// <summary>
         /// The mongoCollection that is used in the repository
@@ -67,6 +69,7 @@ namespace MongoODM
             collection ??= typeof(T).Name.ToSnakeCase() + "s";
             _database = database;
             _populates = new Dictionary<string, bool>();
+            _indices = new List<CreateIndexModel<T>>();
             
             Collection = _database.GetCollection<T>(collection);
 
@@ -86,10 +89,71 @@ namespace MongoODM
         }
 
         /// <summary>
+        /// Search type for index attributes
+        /// </summary>
+        /// <param name="t">The type to be searched</param>
+        /// <param name="path">The path in the type</param>
+        private void CreateIndexHook(Type t, string path = "")
+        {
+            Log("![Index-T]! Checking " + t.Name + " at "+path);
+            
+            //Foreach properties
+            foreach (var prop in t.GetProperties())
+            {
+                bool skip = false;
+                
+                //Check attributes
+                foreach (var attr in prop.GetCustomAttributes(true))
+                {
+                    //ReferenceAttribute: do nothing
+                    //EmbedAttribute: Run hook recursive
+                    //Other property, NOT a collection but actually an object: run hook?
+
+                    if (attr is IndexAttribute index)
+                    {
+                        var indexes = index.Indexes.Select(x => new Index {Field = path + x.Field, Type = x.Type}).ToList();
+                        var indices = new List<IndexKeysDefinition<T>>();
+
+                        foreach (var x in indexes)
+                        {
+                            switch (x.Type)
+                            {
+                                case IndexType.Ascending:
+                                    indices.Add(Builders<T>.IndexKeys.Ascending(x.Field));
+                                    break;
+                                case IndexType.Descending:
+                                    indices.Add(Builders<T>.IndexKeys.Descending(x.Field));
+                                    break;
+                                case IndexType.Hashed:
+                                    indices.Add(Builders<T>.IndexKeys.Hashed(x.Field));
+                                    break;
+                                case IndexType.Text:
+                                    indices.Add(Builders<T>.IndexKeys.Text(x.Field));
+                                    break;
+                                default:
+                                    throw new ArgumentOutOfRangeException();
+                            }
+                        }
+
+                        var idx = indices.Count == 1 ? indices.First() : Builders<T>.IndexKeys.Combine(indices);
+                        _indices.Add(new CreateIndexModel<T>(idx, new CreateIndexOptions {Unique = index.Unique, Background = true}));
+                    }
+                }
+            }
+        }
+
+        public async Task CreateIndexesAsync()
+        {
+            CreateIndexHook(typeof(T));
+            await Collection.Indexes.CreateManyAsync(_indices);
+            _indices.Clear();
+        }
+
+        /// <summary>
         /// Logger helper Logs message to console in debug, when logging is enabled
         /// </summary>
         /// <param name="message">The object to be logged</param>
-        protected void Log(object message)
+        private void Log(object message)
         {
             if(UseLogging)
                 Console.WriteLine(message);
@@ -335,7 +399,7 @@ namespace MongoODM
         /// Shorthand for the population hook
         /// </summary>
         /// <param name="value">The value to be populated</param>
-        private void PopulateHook(T value)
+        protected void PopulateHook(T value)
         {
             if (!DoPopulate)
                 return;
@@ -348,7 +412,7 @@ namespace MongoODM
         /// </summary>
         /// <param name="value">The value to be depopulated</param>
         /// <returns>Depopulated value</returns>
-        private T DepopulateHook(T value)
+        protected T DepopulateHook(T value)
         {
             if (!DoPopulate)
                 return value;
@@ -496,7 +560,9 @@ namespace MongoODM
         /// <param name="document">The document to be added</param>
         public void Insert(T document)
         {
-            Collection.InsertOne(DepopulateHook(document));
+            var doc = DepopulateHook(document);
+            Collection.InsertOne(doc);
+            document.Id = doc.Id;
         }
 
         /// <summary>
