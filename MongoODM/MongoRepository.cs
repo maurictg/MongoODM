@@ -95,21 +95,24 @@ namespace MongoODM
         /// <param name="path">The path in the type</param>
         private void CreateIndexHook(Type t, string path = "")
         {
-            Log("![Index-T]! Checking " + t.Name + " at "+path);
+            Log("[Index] Checking " + t.Name + " at "+path);
             
             //Foreach properties
             foreach (var prop in t.GetProperties())
             {
-                bool skip = false;
-                
                 //Check attributes
                 foreach (var attr in prop.GetCustomAttributes(true))
                 {
-                    //ReferenceAttribute: do nothing
-                    //EmbedAttribute: Run hook recursive
-                    //Other property, NOT a collection but actually an object: run hook?
+                    //ReferenceAttribute: do nothing: OK
+                    //EmbedAttribute: Run hook recursive: OK
+                    //Other property, NOT a collection but actually an object: run hook? TBD
 
-                    if (attr is IndexAttribute index)
+                    if (attr is EmbedAttribute)
+                    {
+                        Log("[Index-I] Recursive on "+prop.Name);
+                        CreateIndexHook(prop.PropertyType, path + prop.Name+".");
+                    }
+                    else if (attr is IndexAttribute index)
                     {
                         var indexes = index.Indexes.Select(x => new Index {Field = path + x.Field, Type = x.Type}).ToList();
                         var indices = new List<IndexKeysDefinition<T>>();
@@ -142,7 +145,10 @@ namespace MongoODM
             }
         }
 
-        public async Task CreateIndexesAsync()
+        /// <summary>
+        /// Method to create indexes automatically
+        /// </summary>
+        public async Task CreateIndexesAsync() //TODO: rename
         {
             CreateIndexHook(typeof(T));
             await Collection.Indexes.CreateManyAsync(_indices);
@@ -541,14 +547,20 @@ namespace MongoODM
         /// Reset all populate attribute overrides
         /// </summary>
         public void ResetPopulates() => _populates.Clear();
-        
+
         /// <summary>
         /// Creates a filter for one item's ID
         /// </summary>
         /// <param name="id">The id to be filtered</param>
         /// <returns>Filter</returns>
         public FilterDefinition<T> GetFilter(string id)
-            => Builders<T>.Filter.Eq(x => x.Id, id);
+        {
+            //TODO: Decide if validation happens here
+            //if (!Constants.ObjectIdRegex.IsMatch(id))
+            //    throw new ArgumentException("Id is not a valid objectId string");
+            
+            return Builders<T>.Filter.Eq(x => x.Id, id);
+        }
 
         /*
          * CRUD methods
@@ -629,14 +641,13 @@ namespace MongoODM
         }
 
         /// <summary>
-        /// Update one or more fields by Id
+        /// Update one document matching filter
         /// </summary>
-        /// <param name="id">The object to be updated</param>
-        /// <param name="update">The update to apply</param>
-        /// <returns>True if update is acknowledged</returns>
-        public bool Update(string id, UpdateDefinition<T> update)
-            => Collection.UpdateOne(GetFilter(id), update).IsAcknowledged;
-        
+        /// <param name="filter">The filter</param>
+        /// <param name="update">The update definition</param>
+        /// <returns>True if update succeeds</returns>
+        public bool Update(FilterDefinition<T> filter, UpdateDefinition<T> update)
+            => Collection.UpdateOne(filter, update).IsAcknowledged;
 
         /// <summary>
         /// Update many documents using filter and updateDefinition

@@ -183,7 +183,6 @@ namespace MongoODM.Abstractions
         /// <param name="filter">The filter to apply</param>
         /// <returns>The amount of documents matching the filter</returns>
         public long Count(BsonDocument filter) => Count(CreateFilter(filter));
-        
         public long Count(object filter) => Count(CreateFilter(filter));
         public long Count(string jsonFilter) => Count(CreateFilter(jsonFilter));
 
@@ -195,15 +194,24 @@ namespace MongoODM.Abstractions
         public T Update(T document);
 
         /// <summary>
+        /// Update one document matching filter
+        /// </summary>
+        /// <param name="filter">The filter</param>
+        /// <param name="update">The update definition</param>
+        /// <returns>True if update succeeds</returns>
+        public bool Update(FilterDefinition<T> filter, UpdateDefinition<T> update);
+
+        /// <summary>
         /// Update one or more fields by Id
         /// </summary>
         /// <param name="id">The object to be updated</param>
         /// <param name="update">The update to apply</param>
         /// <returns>True if update is acknowledged</returns>
-        public bool Update(string id, UpdateDefinition<T> update);
+        public bool Update(string id, UpdateDefinition<T> update)
+            => Update(GetFilter(id), update);
         
         /// <summary>
-        /// Update one or more fields by an object
+        /// Update one or more fields by an object's id
         /// </summary>
         /// <param name="id">The item to be updated</param>
         /// <param name="update">The update definition object</param>
